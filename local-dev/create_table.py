@@ -11,9 +11,17 @@ def create_table():
     )
     
     try:
-        if dynamodb.describe_table(TableName=settings.DYNAMODB_TABLE_TASKS):
-            print(f"Table {settings.DYNAMODB_TABLE_TASKS} already exists.")
-            return
+        dynamodb.describe_table(TableName=settings.DYNAMODB_TABLE_TASKS)
+        print(f"Table {settings.DYNAMODB_TABLE_TASKS} already exists.")
+        return
+    except dynamodb.exceptions.ResourceNotFoundException:
+        # Table does not exist, proceed to create
+        pass
+    except Exception as e:
+        print(f"Error checking table: {e}")
+        return
+
+    try:
         dynamodb.create_table(
             TableName=settings.DYNAMODB_TABLE_TASKS,
             KeySchema=[{'AttributeName': 'task_id', 'KeyType': 'HASH'}],

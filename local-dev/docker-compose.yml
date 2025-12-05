@@ -1,5 +1,14 @@
 services:
+  init-perms:
+    image: alpine
+    command: sh -c "mkdir -p /data/dynamodb_data /data/localstack_data && chmod -R 777 /data/dynamodb_data /data/localstack_data"
+    volumes:
+      - .:/data
+
   localstack:
+    depends_on:
+      init-perms:
+        condition: service_completed_successfully
     image: localstack/localstack
     ports:
       - "4566:4566"            # LocalStack Gateway
@@ -14,8 +23,11 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   dynamodb-local:
+    depends_on:
+      init-perms:
+        condition: service_completed_successfully
     image: amazon/dynamodb-local
-    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ."
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
     ports:
       - "8000:8000"
     volumes:

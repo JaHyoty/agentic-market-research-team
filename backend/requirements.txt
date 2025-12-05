@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+langchain
+langgraph
+langchain-openai
+langchain-community
+boto3
+pydantic
+httpx
+python-dotenv
+tavily-python
+yfinance
+beautifulsoup4
+markdown
+reportlab

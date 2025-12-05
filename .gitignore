@@ -20,6 +20,10 @@ build/
 *.tfstate.backup
 .terraform.lock.hcl
 
+# LocalStack
+local-dev/localstack_data/
+local-dev/dynamodb_data/
+
 # OS
 .DS_Store
 Thumbs.db

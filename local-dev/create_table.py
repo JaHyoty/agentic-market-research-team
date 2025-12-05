@@ -11,6 +11,9 @@ def create_table():
     )
     
     try:
+        if dynamodb.describe_table(TableName=settings.DYNAMODB_TABLE_TASKS):
+            print(f"Table {settings.DYNAMODB_TABLE_TASKS} already exists.")
+            return
         dynamodb.create_table(
             TableName=settings.DYNAMODB_TABLE_TASKS,
             KeySchema=[{'AttributeName': 'task_id', 'KeyType': 'HASH'}],

@@ -1,0 +1,72 @@
+import uvicorn
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import json
+import os
+import sys
+
+# Import the actual Lambda handlers
+# Add project root to python path to allow imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Set environment variables for LocalStack BEFORE importing handler
+os.environ['AWS_ENDPOINT_URL'] = 'http://localhost:4566'
+os.environ['AWS_ACCESS_KEY_ID'] = 'test'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test'
+os.environ['AWS_REGION'] = 'us-east-1'
+os.environ['SQS_QUEUE_URL'] = 'http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/market-research-tasks'
+os.environ['DYNAMODB_TABLE_TASKS'] = 'market-research-tasks'
+
+# Import the actual Lambda handlers
+from backend.lambdas.handler import submit_handler, get_status_handler
+
+app = FastAPI(title="Local API Gateway Emulator")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/research")
+async def proxy_submit(request: Request):
+    body = await request.json()
+    
+    # Construct Lambda Event
+    event = {
+        "body": json.dumps(body)
+    }
+    context = {} # Mock context
+    
+    response = submit_handler(event, context)
+    
+    if response['statusCode'] >= 400:
+        raise HTTPException(status_code=response['statusCode'], detail=json.loads(response['body']))
+        
+    return json.loads(response['body'])
+
+@app.get("/tasks/{task_id}")
+async def proxy_get_status(task_id: str):
+    # Construct Lambda Event
+    event = {
+        "pathParameters": {
+            "task_id": task_id
+        }
+    }
+    context = {}
+    
+    response = get_status_handler(event, context)
+    
+    if response['statusCode'] >= 400:
+        raise HTTPException(status_code=response['statusCode'], detail=json.loads(response['body']))
+        
+    return json.loads(response['body'])
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8080)

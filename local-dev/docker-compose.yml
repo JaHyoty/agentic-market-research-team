@@ -21,6 +21,11 @@ services:
       - "./localstack_data:/var/lib/localstack"
       - "./init-scripts:/etc/localstack/init/ready.d"
       - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   dynamodb-local:
     depends_on:
@@ -33,5 +38,72 @@ services:
     volumes:
       - "./dynamodb_data:/home/dynamodblocal/data"
     working_dir: /home/dynamodblocal
+
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: local-dev/Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - SQS_QUEUE_URL=http://localstack:4566/000000000000/market-research-tasks
+      - DYNAMODB_TABLE_TASKS=market-research-tasks
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dynamodb-local:
+        condition: service_started
+    volumes:
+      - ../backend:/app/backend
+      - ../local-dev:/app/local-dev
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  create-tables:
+    build:
+      context: ..
+      dockerfile: local-dev/Dockerfile.api
+    command: python local-dev/create_table.py
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - DYNAMODB_TABLE_TASKS=market-research-tasks
+    depends_on:
+      dynamodb-local:
+        condition: service_started
+    volumes:
+      - ../local-dev:/app/local-dev
+
+  verify-env:
+    build:
+      context: ..
+      dockerfile: local-dev/Dockerfile.api
+    command: python local-dev/verify_env.py
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - API_GATEWAY_URL=http://api-gateway:8080
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+      dynamodb-local:
+        condition: service_started
+      create-tables:
+        condition: service_completed_successfully
+    volumes:
+      - ../local-dev:/app/local-dev
 
   # We will add backend and frontend services later when we have the Dockerfiles

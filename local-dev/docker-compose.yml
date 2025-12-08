@@ -50,6 +50,7 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_REGION=us-east-1
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - SQS_QUEUE_URL=http://localstack:4566/000000000000/market-research-tasks
       - DYNAMODB_TABLE_TASKS=market-research-tasks
     depends_on:

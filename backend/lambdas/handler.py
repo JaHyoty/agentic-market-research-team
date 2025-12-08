@@ -8,8 +8,10 @@ from botocore.exceptions import ClientError
 
 # Initialize clients outside handler for reuse
 endpoint_url = os.environ.get('AWS_ENDPOINT_URL') # For LocalStack
+dynamodb_endpoint_url = os.environ.get('DYNAMODB_ENDPOINT', endpoint_url) # Specific for DynamoDB Local
+
 sqs = boto3.client('sqs', endpoint_url=endpoint_url, region_name='us-east-1')
-dynamodb = boto3.client('dynamodb', endpoint_url=endpoint_url, region_name='us-east-1')
+dynamodb = boto3.client('dynamodb', endpoint_url=dynamodb_endpoint_url, region_name='us-east-1')
 
 SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL')
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE_TASKS')

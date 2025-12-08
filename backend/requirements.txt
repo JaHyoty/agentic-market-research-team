@@ -13,3 +13,6 @@ yfinance
 beautifulsoup4
 markdown
 reportlab
+kubernetes
+pytest
+requests

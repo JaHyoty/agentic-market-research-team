@@ -10,12 +10,21 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set environment variables for LocalStack BEFORE importing handler
-os.environ['AWS_ENDPOINT_URL'] = 'http://localhost:4566'
-os.environ['AWS_ACCESS_KEY_ID'] = 'test'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'test'
-os.environ['AWS_REGION'] = 'us-east-1'
-os.environ['SQS_QUEUE_URL'] = 'http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/market-research-tasks'
-os.environ['DYNAMODB_TABLE_TASKS'] = 'market-research-tasks'
+# Only set if not already present (to allow docker-compose to override)
+if not os.environ.get('AWS_ENDPOINT_URL'):
+    os.environ['AWS_ENDPOINT_URL'] = 'http://localhost:4566'
+if not os.environ.get('AWS_ACCESS_KEY_ID'):
+    os.environ['AWS_ACCESS_KEY_ID'] = 'test'
+if not os.environ.get('AWS_SECRET_ACCESS_KEY'):
+    os.environ['AWS_SECRET_ACCESS_KEY'] = 'test'
+if not os.environ.get('AWS_REGION'):
+    os.environ['AWS_REGION'] = 'us-east-1'
+if not os.environ.get('DYNAMODB_ENDPOINT'):
+    os.environ['DYNAMODB_ENDPOINT'] = 'http://localhost:8000'
+if not os.environ.get('SQS_QUEUE_URL'):
+    os.environ['SQS_QUEUE_URL'] = 'http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/market-research-tasks'
+if not os.environ.get('DYNAMODB_TABLE_TASKS'):
+    os.environ['DYNAMODB_TABLE_TASKS'] = 'market-research-tasks'
 
 # Import the actual Lambda handlers
 from backend.lambdas.handler import submit_handler, get_status_handler

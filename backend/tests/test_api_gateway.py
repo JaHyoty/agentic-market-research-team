@@ -8,7 +8,7 @@ def test_health_check(api_url):
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
 
-def test_submit_research_queues_message(api_url, sqs_client, queue_url, clean_queue):
+def test_submit_research_queues_message(api_url, sqs_client, queue_url, clean_queue, clean_dynamodb, dynamodb_client, dynamodb_table):
     payload = {
         "query": "Test research query",
         "detailed_report": False
@@ -48,3 +48,15 @@ def test_submit_research_queues_message(api_url, sqs_client, queue_url, clean_qu
     # or wrapped. We'll check if our query is present.
     assert "Test research query" in messages[0]["Body"]
     assert task_id in messages[0]["Body"]
+
+    # 3. Verify entry in DynamoDB
+    response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key={'task_id': {'S': task_id}}
+    )
+    
+    assert 'Item' in response, "Task not found in DynamoDB"
+    item = response['Item']
+    assert item['status']['S'] == 'QUEUED'
+    assert item['task_id']['S'] == task_id
+    assert 'created_at' in item

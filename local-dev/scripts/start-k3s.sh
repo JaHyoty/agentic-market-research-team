@@ -49,13 +49,11 @@ kubectl apply --server-side --force-conflicts -f https://raw.githubusercontent.c
 
 # Apply Local Manifests
 echo "Applying Local Manifests..."
-if [ -d "/manifests" ]; then
-    # We use 'apply -f' on specific files as requested, ignoring errors if files missing but warning
-    [ -f "/manifests/worker-deployment-local.yaml" ] && kubectl apply --server-side --force-conflicts -f /manifests/worker-deployment-local.yaml
-    [ -f "/manifests/keda-scaledobject-local.yaml" ] && kubectl apply --server-side --force-conflicts -f /manifests/keda-scaledobject-local.yaml
-    [ -f "/manifests/karpenter-nodepool.yaml" ] && kubectl apply --server-side --force-conflicts -f /manifests/karpenter-nodepool.yaml
+if [ -d "/manifests/overlays/local" ]; then
+    echo "Applying Kustomize overlay from /manifests/overlays/local..."
+    kubectl apply --server-side --force-conflicts -k /manifests/overlays/local
 else
-    echo "Warning: /manifests directory not found."
+    echo "Warning: /manifests/overlays/local directory not found."
 fi
 
 echo "K8s Setup Complete!"

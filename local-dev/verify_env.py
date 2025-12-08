@@ -77,13 +77,28 @@ def verify_kubernetes():
         print(f"Kubernetes verification failed: {e}")
         return False
 
+def verify_registry():
+    registry_url = os.environ.get('REGISTRY_URL', 'http://localhost:5000')
+    try:
+        # Docker Registry V2 health check
+        with urllib.request.urlopen(f'{registry_url}/v2/') as response:
+            if response.status == 200:
+                print("Local Registry: Healthy")
+                return True
+        print(f"Local Registry: Unhealthy status code {response.status}")
+        return False
+    except Exception as e:
+        print(f"Local Registry verification failed: {e}")
+        return False
+
 if __name__ == "__main__":
     ls = verify_localstack()
     ddb = verify_dynamodb()
     api = verify_api_gateway()
     k8s = verify_kubernetes()
+    reg = verify_registry()
     
-    if ls and ddb and api and k8s:
+    if ls and ddb and api and k8s and reg:
         print("Environment Verified!")
     else:
         sys.exit(1)

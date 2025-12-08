@@ -39,6 +39,11 @@ services:
       - "./dynamodb_data:/home/dynamodblocal/data"
     working_dir: /home/dynamodblocal
 
+  registry:
+    image: registry:2
+    ports:
+      - "5000:5000"
+
   api-gateway:
     build:
       context: ..
@@ -96,7 +101,9 @@ services:
       - ./kubeconfig:/output
       - ./scripts/start-k3s.sh:/start-k3s.sh
       - ../k8s:/manifests
+      - ./registries.yaml:/etc/rancher/k3s/registries.yaml
       - /sys/fs/cgroup:/sys/fs/cgroup:rw # Fix for cgroup v2
+
     ports:
       - "6443:6443"
     privileged: true # K3s needs this for container networking
@@ -119,7 +126,11 @@ services:
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_REGION=us-east-1
       - KUBECONFIG=/app/local-dev/kubeconfig/kubeconfig-internal.yaml
+      - REGISTRY_URL=http://registry:5000
     depends_on:
+      registry:
+        condition: service_started
+
       api-gateway:
         condition: service_healthy
       dynamodb-local:

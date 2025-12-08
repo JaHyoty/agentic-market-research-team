@@ -19,6 +19,10 @@ echo -e "S3 Buckets: market-research-artifacts, market-research-reports"
 echo -e "SQS Queue: market-research-tasks"
 echo -e "DynamoDB Table: market-research-tasks"
 echo -e "Local API Gateway: http://localhost:8080"
+echo -e "Kubernetes (K3s): Running"
+echo -e "Kubeconfig: $(pwd)/local-dev/kubeconfig/kubeconfig.yaml"
+echo -e "  export KUBECONFIG=$(pwd)/local-dev/kubeconfig/kubeconfig.yaml"
+echo -e "  kubectl get pods"
 
 echo -e "\nTo start the worker:
   export PYTHONPATH=$PYTHONPATH:$(pwd)

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-research-worker
+spec:
+  replicas: 0 # Let KEDA scale it
+  selector:
+    matchLabels:
+      app: market-research-worker
+  template:
+    metadata:
+      labels:
+        app: market-research-worker
+    spec:
+      containers:
+      - name: worker
+        # Use a public image to avoid building/loading local images for now.
+        # This is just to verify autoscale triggers.
+        image: python:3.11-slim 
+        command: ["/bin/sh", "-c", "echo 'Worker started'; sleep infinity"]
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: SQS_QUEUE_URL
+          value: "http://localstack:4566/000000000000/market-research-tasks"
+        - name: AWS_ACCESS_KEY_ID
+          value: "test"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "test"
+        - name: AWS_ENDPOINT_URL
+          value: "http://localstack:4566"

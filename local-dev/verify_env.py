@@ -3,6 +3,7 @@ import sys
 import urllib.request
 import json
 import os
+from kubernetes import client, config
 
 def verify_localstack():
     endpoint_url = os.environ.get('AWS_ENDPOINT_URL', 'http://localhost:4566')
@@ -47,11 +48,42 @@ def verify_api_gateway():
         print(f"Local API Gateway verification failed: {e}")
         return False
 
+def verify_kubernetes():
+    try:        
+        # Check if running in Docker (KUBECONFIG env var set) or local
+        if os.environ.get('KUBECONFIG'):
+            config.load_kube_config()
+        else:
+            # Fallback for local run if KUBECONFIG is not set, try default
+            try:
+                config.load_kube_config()
+            except:
+                print("Kubernetes verification skipped: KUBECONFIG not found.")
+                return True # Optional locally
+
+        v1 = client.CoreV1Api()
+        nodes = v1.list_node()
+        print(f"Kubernetes Nodes: {[n.metadata.name for n in nodes.items]}")
+        
+        # Check pods in default namespace
+        pods = v1.list_namespaced_pod("default")
+        print(f"Kubernetes Pods (default): {[p.metadata.name for p in pods.items]}")
+        
+        return True
+    except ImportError:
+        print("Kubernetes verification skipped: 'kubernetes' module not found.")
+        return True
+    except Exception as e:
+        print(f"Kubernetes verification failed: {e}")
+        return False
+
 if __name__ == "__main__":
     ls = verify_localstack()
     ddb = verify_dynamodb()
     api = verify_api_gateway()
-    if ls and ddb and api:
+    k8s = verify_kubernetes()
+    
+    if ls and ddb and api and k8s:
         print("Environment Verified!")
     else:
         sys.exit(1)

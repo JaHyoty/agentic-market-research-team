@@ -10,7 +10,7 @@ import json
 import sys
 from backend.app.config import settings
 
-print(f"Initializing ChatOpenAI with API Key present: {bool(settings.OPENAI_API_KEY)}", file=sys.stderr)
+print(f"Initializing ChatOpenRouter with API Key present: {bool(settings.OPENROUTER_API_KEY)}", file=sys.stderr)
 
 # Initialize LLM
 llm = ChatOpenRouter(model="x-ai/grok-4-fast", temperature=0)

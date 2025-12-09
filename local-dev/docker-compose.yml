@@ -89,29 +89,3 @@ services:
         condition: service_started
     volumes:
       - ../local-dev:/app/local-dev
-
-  verify-env:
-    build:
-      context: ..
-      dockerfile: local-dev/Dockerfile.api
-    command: python local-dev/verify_env.py
-    environment:
-      - AWS_ENDPOINT_URL=http://localstack:4566
-      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
-      - API_GATEWAY_URL=http://api-gateway:8080
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_REGION=us-east-1
-      - KUBECONFIG=/app/local-dev/kubeconfig/kubeconfig-internal.yaml
-      - REGISTRY_URL=http://registry:5000
-    depends_on:
-      registry:
-        condition: service_started
-      api-gateway:
-        condition: service_healthy
-      dynamodb-local:
-        condition: service_started
-      create-tables:
-        condition: service_completed_successfully
-    volumes:
-      - ../local-dev:/app/local-dev

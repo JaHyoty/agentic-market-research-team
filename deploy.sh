@@ -61,6 +61,52 @@ EOF
         echo "Warning: Could not find LocalStack container IP. DNS resolution for 'localstack' might fail."
     fi
 
+    # Load secrets from .env if present
+    if [ -f local-dev/.env ]; then
+        echo "Loading secrets from local-dev/.env..."
+        export $(grep -v '^#' local-dev/.env | xargs)
+    else
+        echo "Warning: local-dev/.env not found using default mock keys except for OpenRouter which might fail."
+    fi
+
+    echo "Seeding Secrets in LocalStack..."
+    docker exec local-dev-localstack-1 awslocal secretsmanager delete-secret --secret-id market-research-keys --force-delete-without-recovery || true
+    docker exec local-dev-localstack-1 awslocal secretsmanager create-secret \
+        --name market-research-keys \
+        --secret-string "{\"OPENAI_API_KEY\":\"${OPENAI_API_KEY:-mock-openai-key}\",\"TAVILY_API_KEY\":\"${TAVILY_API_KEY:-mock-tavily-key}\",\"OPENROUTER_API_KEY\":\"${OPENROUTER_API_KEY:-mock-openrouter-key}\"}" \
+        --region us-east-1 || true
+
+    echo "Configuring DynamoDB DNS workaround..."
+    DYNAMODB_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' local-dev-dynamodb-local-1 || true)
+    if [ -n "$DYNAMODB_IP" ]; then
+        echo "Found DynamoDB IP: $DYNAMODB_IP"
+        # Create Service and Endpoints for dynamodb resolution
+        cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamodb-local
+  namespace: default
+spec:
+  ports:
+  - port: 8000
+    targetPort: 8000
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: dynamodb-local
+  namespace: default
+subsets:
+- addresses:
+  - ip: $DYNAMODB_IP
+  ports:
+  - port: 8000
+EOF
+    else
+        echo "Warning: Could not find DynamoDB container IP. DNS resolution for 'dynamodb-local' might fail."
+    fi
+
     echo "Applying manifests..."
     kubectl apply -k k8s/overlays/local
     

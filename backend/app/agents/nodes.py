@@ -1,4 +1,4 @@
-from langchain_openai import ChatOpenAI
+from backend.app.openrouter import ChatOpenRouter
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.app.models.state import ResearchState
 from backend.app.agents.prompts import *
@@ -7,8 +7,13 @@ from backend.app.tools.finance import get_stock_price, get_financial_metrics
 from backend.app.tools.web import scrape_website
 import json
 
+import sys
+from backend.app.config import settings
+
+print(f"Initializing ChatOpenAI with API Key present: {bool(settings.OPENAI_API_KEY)}", file=sys.stderr)
+
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+llm = ChatOpenRouter(model="x-ai/grok-4-fast", temperature=0)
 
 def supervisor_node(state: ResearchState):
     messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + state['messages']

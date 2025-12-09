@@ -9,6 +9,9 @@ patches:
     kind: Deployment
     name: market-research-worker
   patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: Always
     - op: replace
       path: /spec/replicas
       value: 0
@@ -41,19 +44,8 @@ patches:
     - op: add
       path: /spec/template/spec/containers/0/env/-
       value:
-        name: OPENAI_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: market-research-secrets
-            key: OPENAI_API_KEY
-    - op: add
-      path: /spec/template/spec/containers/0/env/-
-      value:
-        name: TAVILY_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: market-research-secrets
-            key: TAVILY_API_KEY
+        name: DYNAMODB_ENDPOINT
+        value: "http://dynamodb-local:8000"
 
 - target:
     kind: ScaledObject

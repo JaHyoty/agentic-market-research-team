@@ -56,6 +56,7 @@ def run_worker():
     queue_url = settings.SQS_QUEUE_URL
     
     print(f"Worker listening on {queue_url}...")
+    error_count = 0
     
     while True:
         try:
@@ -77,6 +78,10 @@ def run_worker():
                 
         except Exception as e:
             print(f"Error in worker loop: {e}")
+            error_count += 1
+            if error_count >= 5:
+                print("Worker loop error count exceeded. Exiting.")
+                break
             time.sleep(5)
 
 if __name__ == "__main__":

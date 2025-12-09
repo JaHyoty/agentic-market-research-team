@@ -8,10 +8,11 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}Stopping Local Environment...${NC}"
 
 cd local-dev
-docker-compose down
 
-# Stop Local API Gateway
-# No need to kill manually, docker-compose down handles it.
-rm -f local-dev/api_gateway.pid
+# Stop Kind Cluster
+echo -e "${BLUE}Deleting Kind Cluster...${NC}"
+kind delete cluster --name agentic-cluster || true
+
+docker compose down
 
 echo -e "${GREEN}Local Environment stopped.${NC}"

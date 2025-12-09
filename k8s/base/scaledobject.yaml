@@ -1,0 +1,18 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: aws-sqs-queue-scaledobject
+spec:
+  scaleTargetRef:
+    name: market-research-worker
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  triggers:
+  - type: aws-sqs-queue
+    metadata:
+      queueURL: http://localstack:4566/000000000000/market-research-tasks
+      awsEndpoint: http://localstack:4566
+      awsRegion: us-east-1
+      identityOwner: operator
+    authenticationRef:
+      name: keda-aws-credentials

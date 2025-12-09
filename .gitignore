@@ -34,3 +34,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# K3s Data
+local-dev/k3s_data/
+local-dev/kubeconfig/

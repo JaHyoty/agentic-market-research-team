@@ -47,7 +47,17 @@ def generate_pdf(markdown_text):
                 style = styles["Heading3"]
                 line = line[4:]
             
-            story.append(Paragraph(line, style))
+            # Sanitize line for ReportLab XML parser
+            # ReportLab requires self-closing tags like <br/> and doesn't like content inside them
+            line = line.replace('<br>', '<br/>').replace('</br>', '')
+            
+            try:
+                story.append(Paragraph(line, style))
+            except Exception as e:
+                # Fallback if parsing keeps failing: escape and print as plain text
+                import html as html_lib
+                safe_line = html_lib.escape(line)
+                story.append(Paragraph(safe_line, style))
             story.append(Spacer(1, 12))
             
     doc.build(story)

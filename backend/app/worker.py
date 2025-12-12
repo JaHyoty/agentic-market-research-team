@@ -2,8 +2,9 @@ import time
 import json
 import traceback
 import sys
+import io
 from backend.app.config import settings
-from backend.app.utils import get_boto3_client, update_task_status, generate_pdf, upload_to_s3
+from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3
 from backend.app.graph.graph import create_graph
 from langchain_core.messages import HumanMessage
 
@@ -68,17 +69,26 @@ def process_message(message, sqs_client, queue_url):
         print("Graph execution completed.", file=sys.stderr)
         
         # Extract report
+        print(f"--- Extracting report for task {task_id} ---", file=sys.stderr)
         report = final_state.get('draft_report', 'No report generated.')
+        print(f"--- Report extracted. Length: {len(report)} characters ---", file=sys.stderr)
         
-        # Generate PDF
-        pdf_buffer = generate_pdf(report)
+        # Generate Report Buffer (Markdown)
+        print(f"--- Preparing Markdown report for task {task_id} ---", file=sys.stderr)
+        # Convert string to bytes for S3 upload
+        report_buffer = io.BytesIO(report.encode('utf-8'))
+        print(f"--- Report buffer ready. Size: {report_buffer.getbuffer().nbytes} bytes ---", file=sys.stderr)
         
         # Upload to S3
-        key = f"{task_id}/report.pdf"
-        s3_url = upload_to_s3(pdf_buffer, settings.S3_BUCKET_REPORTS, key)
+        print(f"--- Uploading Report to S3 for task {task_id}. Bucket: {settings.S3_BUCKET_REPORTS} ---", file=sys.stderr)
+        key = f"{task_id}/report.md"
+        s3_url = upload_to_s3(report_buffer, settings.S3_BUCKET_REPORTS, key)
+        print(f"--- Report uploaded to S3. URL: {s3_url} ---", file=sys.stderr)
         
         # Update status
+        print(f"--- Updating task status to COMPLETED for task {task_id} ---", file=sys.stderr)
         update_task_status(task_id, "COMPLETED", progress=["Report generated"], report_url=s3_url)
+
         print(f"Task {task_id} completed.")
         
     except Exception as e:

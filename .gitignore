@@ -23,6 +23,7 @@ build/
 # LocalStack
 local-dev/localstack_data/
 local-dev/dynamodb_data/
+local-dev/reports/
 
 # OS
 .DS_Store

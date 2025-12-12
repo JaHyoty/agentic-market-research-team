@@ -4,6 +4,7 @@ from langchain_core.messages import AnyMessage
 
 class ResearchState(TypedDict):
     task: str
+    date: str
     plan: List[str]
     financial_data: Annotated[Dict[str, Any], operator.ior]
     market_intelligence: Annotated[List[str], operator.add]

@@ -53,7 +53,8 @@ def process_message(message, sqs_client, queue_url):
         initial_state = {
             "task": query,
             "messages": [HumanMessage(content=query)],
-            "revision_count": 0
+            "revision_count": 0,
+            "date": datetime.now().strftime("%Y-%m-%d")
         }
         
         # Run graph with streaming for visibility

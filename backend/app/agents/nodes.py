@@ -75,7 +75,7 @@ def scout_node(state: ResearchState):
 def writer_node(state: ResearchState):
     messages = [SystemMessage(content=WRITER_PROMPT)] + state['messages']
     response = llm.invoke(messages)
-    return {"draft_report": response.content, "messages": [response]}
+    return {"draft_report": response.content, "critique": "", "messages": [response]}
 
 def reviewer_node(state: ResearchState):
     messages = [SystemMessage(content=REVIEWER_PROMPT), HumanMessage(content=state['draft_report'])]

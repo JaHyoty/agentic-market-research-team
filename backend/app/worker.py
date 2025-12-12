@@ -3,8 +3,9 @@ import json
 import traceback
 import sys
 import io
+from datetime import datetime
 from backend.app.config import settings
-from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3
+from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3, parse_response_content
 from backend.app.graph.graph import create_graph
 from langchain_core.messages import HumanMessage
 
@@ -65,8 +66,10 @@ def process_message(message, sqs_client, queue_url):
             # Log progress based on state changes
             last_message = final_state['messages'][-1] if final_state.get('messages') else None
             if last_message:
-                content_preview = str(last_message.content)[:70] + "..." if len(str(last_message.content)) > 70 else str(last_message.content)
-                print(f"--- State Updated. Last Message: {type(last_message).__name__}: {content_preview} ---", file=sys.stderr)
+                content_text = parse_response_content(last_message.content)
+                content_preview = content_text[:70] + "..." if len(content_text) > 70 else content_text
+                sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Unknown"
+                print(f"--- State Updated. Last Message: {type(last_message).__name__} ({sender}): {content_preview} ---", file=sys.stderr)
         print("Graph execution completed.", file=sys.stderr)
         
         # Extract report
@@ -86,6 +89,27 @@ def process_message(message, sqs_client, queue_url):
         s3_url = upload_to_s3(report_buffer, settings.S3_BUCKET_REPORTS, key)
         print(f"--- Report uploaded to S3. URL: {s3_url} ---", file=sys.stderr)
         
+        # Save Full Log to Markdown
+        print(f"--- Saving Full Log for task {task_id} ---", file=sys.stderr)
+        log_content = f"# Conversation Log for Task {task_id}\n\n"
+        log_content += f"**Query:** {query}\n"
+        log_content += f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        log_content += "---\n\n"
+        
+        if final_state.get('messages'):
+            for msg in final_state['messages']:
+                role = type(msg).__name__
+                sender = msg.name if hasattr(msg, 'name') and msg.name else role
+                content = parse_response_content(msg.content)
+                log_content += f"### {role} ({sender})\n\n"
+                log_content += f"{content}\n\n"
+                log_content += "---\n\n"
+                
+        log_buffer = io.BytesIO(log_content.encode('utf-8'))
+        log_key = f"{task_id}/logs.md"
+        log_url = upload_to_s3(log_buffer, settings.S3_BUCKET_REPORTS, log_key)
+        print(f"--- Logs uploaded to S3. URL: {log_url} ---", file=sys.stderr)
+        
         # Update status
         print(f"--- Updating task status to COMPLETED for task {task_id} ---", file=sys.stderr)
         update_task_status(task_id, "COMPLETED", progress=["Report generated"], report_url=s3_url)
@@ -97,6 +121,8 @@ def process_message(message, sqs_client, queue_url):
         traceback.print_exc()
         if task_id:
             update_task_status(task_id, "FAILED", progress=[f"Error: {str(e)}"])
+        print(f"Task {task_id} failed.")
+
     finally:
         # Stop Heartbeat
         if heartbeat_thread:

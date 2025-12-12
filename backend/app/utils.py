@@ -6,6 +6,17 @@ from reportlab.lib.styles import getSampleStyleSheet
 import markdown
 import io
 
+def parse_response_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text = ""
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text += block.get("text", "")
+        return text if text else str(content)
+    return str(content)
+
 def get_boto3_client(service_name):
     if settings.ENV == "local":
         endpoint_url = settings.DYNAMODB_ENDPOINT if service_name == "dynamodb" else settings.LOCALSTACK_ENDPOINT

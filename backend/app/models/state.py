@@ -13,3 +13,4 @@ class ResearchState(TypedDict):
     critique: str
     messages: Annotated[List[AnyMessage], operator.add]
     revision_count: int
+    next_step: str

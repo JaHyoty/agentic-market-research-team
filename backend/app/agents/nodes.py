@@ -5,6 +5,8 @@ from backend.app.agents.prompts import *
 from backend.app.tools.search import search_web
 from backend.app.tools.finance import get_stock_price, get_financial_metrics
 from backend.app.tools.web import scrape_website
+from backend.app.utils import parse_response_content
+import re
 import json
 
 import sys
@@ -13,27 +15,50 @@ from backend.app.config import settings
 print(f"Initializing ChatOpenRouter with API Key present: {bool(settings.OPENROUTER_API_KEY)}", file=sys.stderr)
 
 # Initialize LLM
-llm = ChatOpenRouter(model="x-ai/grok-4-fast", temperature=0)
+llm = ChatOpenRouter(
+    model="x-ai/grok-4-fast",
+    temperature=0,
+    reasoning={
+        "exclude": True
+    }
+)
 
 def supervisor_node(state: ResearchState):
     messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + state['messages']
-    # In a real implementation, we would use structured output to decide the next node
-    # For simplicity here, we will just analyze the state and pick a next step
-    # This is a simplified logic for the prototype
+    response = llm.invoke(messages)
+    decision = parse_response_content(response.content).strip()
     
-    # Check what data we have
-    has_financials = bool(state.get('financial_data'))
-    has_market = bool(state.get('market_intelligence'))
-    has_competitors = bool(state.get('competitor_benchmarks'))
+    # Basic validation/cleanup of the decision
+    valid_steps = ["quant", "researcher", "scout", "writer", "reviewer", "FINISH"]
     
-    if not has_financials:
-        return {"messages": [SystemMessage(content="Routing to Quant")]}
-    if not has_market:
-        return {"messages": [SystemMessage(content="Routing to Researcher")]}
-    if not has_competitors:
-        return {"messages": [SystemMessage(content="Routing to Scout")]}
+    # Use regex to find whole words to avoid partial matches (e.g. "quant" in "Quantification")
+    next_step = None
+    
+    # Priority 1: Check for exact match after stripping (most reliable)
+    clean_decision = decision.strip().lower()
+    for step in valid_steps:
+        if clean_decision == step.lower():
+            next_step = step if step != "FINISH" else "FINISH"
+            break
+            
+    # Priority 2: Check boundaries if no exact match (e.g. "I choose quant")
+    if not next_step:
+        for step in valid_steps:
+            pattern = r'\b' + re.escape(step) + r'\b'
+            if re.search(pattern, decision, re.IGNORECASE):
+                next_step = step if step != "FINISH" else "FINISH"
+                break
+            
+    if not next_step:
+        # Default fallback
+        print(f"Supervisor Warning: Could not parse decision '{decision}'. Defaulting to 'supervisor'.", file=sys.stderr)
+        next_step = "supervisor"
         
-    return {"messages": [SystemMessage(content="Routing to Writer")]}
+    print(f"Supervisor Decision: {next_step} (Raw: {decision[:100]}...)", file=sys.stderr)
+    
+    # We add the supervisor's decision to the message history for transparency.
+    response.name = "supervisor"
+    return {"next_step": next_step, "messages": [response]}
 
 def quant_node(state: ResearchState):
     messages = [SystemMessage(content=QUANT_PROMPT)] + state['messages']
@@ -58,26 +83,36 @@ def quant_node(state: ResearchState):
     # Simple heuristic: look for uppercase words that might be tickers
     # This is very basic.
     
+    response.content = parse_response_content(response.content)
+    response.name = "quant"
     return {"financial_data": {"status": "collected"}, "messages": [response]}
 
 def researcher_node(state: ResearchState):
     messages = [SystemMessage(content=RESEARCHER_PROMPT)] + state['messages']
     agent = llm.bind_tools([search_web])
     response = agent.invoke(messages)
+    response.content = parse_response_content(response.content)
+    response.name = "researcher"
     return {"market_intelligence": ["Market data collected"], "messages": [response]}
 
 def scout_node(state: ResearchState):
     messages = [SystemMessage(content=SCOUT_PROMPT)] + state['messages']
     agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)
+    response.content = parse_response_content(response.content)
+    response.name = "scout"
     return {"competitor_benchmarks": ["Competitor data collected"], "messages": [response]}
 
 def writer_node(state: ResearchState):
     messages = [SystemMessage(content=WRITER_PROMPT)] + state['messages']
     response = llm.invoke(messages)
-    return {"draft_report": response.content, "critique": "", "messages": [response]}
+    content = parse_response_content(response.content)
+    response.name = "writer"
+    return {"draft_report": content, "critique": "", "messages": [response]}
 
 def reviewer_node(state: ResearchState):
     messages = [SystemMessage(content=REVIEWER_PROMPT), HumanMessage(content=state['draft_report'])]
     response = llm.invoke(messages)
-    return {"critique": response.content, "messages": [response]}
+    content = parse_response_content(response.content)
+    response.name = "reviewer"
+    return {"critique": content, "messages": [response]}

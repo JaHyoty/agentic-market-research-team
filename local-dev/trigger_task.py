@@ -18,7 +18,7 @@ def trigger_and_watch():
     task_id = str(uuid.uuid4())
     message_body = {
         "task_id": task_id,
-        "query": "What is the market size of BEV sales in the US?"
+        "query": "Provide a market research report on the topic of: use of cosmetics to help with atopic dermatitis in 2026 to 2030"
     }
     
     print(f"Sending task {task_id} to {queue_url}...")
@@ -98,7 +98,7 @@ def trigger_and_watch():
                 break
             if line:
                 print(line, end='')
-                if f"Task {task_id} completed" in line or f"Task {task_id} failed" in line:
+                if f"Task {task_id} completed" in line or f"Task {task_id} failed" in line or f"Task {task_id} paused" in line:
                     completed = True
                     # We continue briefly to flush any remaining logs then exit?
                     # The worker continues running, so 'process' won't exit.

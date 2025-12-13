@@ -26,12 +26,11 @@ class Config:
     ENV = os.getenv("ENV", "local")
 
     def __init__(self):
-        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
         self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
         
         # If keys are missing, try to fetch from Secrets Manager
-        if not self.OPENAI_API_KEY or not self.OPENROUTER_API_KEY or not self.TAVILY_API_KEY:
+        if not self.OPENROUTER_API_KEY or not self.TAVILY_API_KEY:
             self._fetch_secrets()
 
     def _fetch_secrets(self):
@@ -52,12 +51,6 @@ class Config:
             secrets = json.loads(response['SecretString'])
             
             print(f"Secrets response keys: {secrets.keys()}", file=sys.stderr)
-            
-            if not self.OPENAI_API_KEY:
-                self.OPENAI_API_KEY = secrets.get("OPENAI_API_KEY")
-                print(f"Set OPENAI_API_KEY from secrets: {bool(self.OPENAI_API_KEY)}", file=sys.stderr)
-                if self.OPENAI_API_KEY:
-                    os.environ["OPENAI_API_KEY"] = self.OPENAI_API_KEY
 
             if not self.OPENROUTER_API_KEY:
                 self.OPENROUTER_API_KEY = secrets.get("OPENROUTER_API_KEY")

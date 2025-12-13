@@ -17,23 +17,56 @@ print(f"Initializing ChatOpenRouter with API Key present: {bool(settings.OPENROU
 # Initialize LLM
 llm = ChatOpenRouter(
     model="x-ai/grok-4-fast",
-    temperature=0,
-    reasoning={
-        "exclude": True
-    }
+    temperature=0
 )
 
 def supervisor_node(state: ResearchState):
-    messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + state['messages']
+    # check if revision limit reached
+    if state.get("revision_count", 0) >= 3:
+        print("Supervisor: Revision limit (3) reached. Ending graph.", file=sys.stderr)
+        return {"next_step": "FINISH", "messages": []}
+    
+    # Construct context from state data instead of raw messages
+    context = f"Task: {state.get('task')}\n\n"
+    
+    context += f"Financial Data: {json.dumps(state.get('financial_data', 'No financial data collected'))}\n\n"
+    context += f"Market Intelligence: {state.get('market_intelligence', 'No market intelligence collected')}\n\n"
+    context += f"Competitor Benchmarks: {state.get('competitor_benchmarks', 'No competitor benchmarks collected')}\n\n"
+    context += f"Draft Report: {state.get('draft_report', 'No draft report generated')}\n\n"
+    
+    if state.get('draft_report'):
+        context += f"Reviewer Critique: {state.get('critique', 'No critique on draft report provided')}\n"
+
+    # We add the last message if it's from a tool or relevant, 
+    # but the user requested to avoid agent instructions. 
+    # Let's trust the state data.
+    
+    messages = [
+        SystemMessage(content=SUPERVISOR_PROMPT),
+        HumanMessage(content=context)
+    ]
+    
     response = llm.invoke(messages)
     decision = parse_response_content(response.content).strip()
     
     # Basic validation/cleanup of the decision
-    valid_steps = ["quant", "researcher", "scout", "writer", "reviewer", "FINISH"]
+    valid_steps = ["reviewer", "writer", "quant", "researcher", "scout", "FINISH"]
     
     # Use regex to find whole words to avoid partial matches (e.g. "quant" in "Quantification")
     next_step = None
     
+    # Priority 0: Check for ask_question
+    if decision.startswith("ask_question:"):
+        question = decision.split(":", 1)[1].strip()
+        next_step = "ask_question"
+        print(f"Supervisor Decision: ASK QUESTION -> {question}", file=sys.stderr)
+        response.name = "supervisor"
+        return {
+            "next_step": next_step, 
+            "clarification_question": question,
+            "messages": [response]
+        }
+
     # Priority 1: Check for exact match after stripping (most reliable)
     clean_decision = decision.strip().lower()
     for step in valid_steps:
@@ -41,7 +74,15 @@ def supervisor_node(state: ResearchState):
             next_step = step if step != "FINISH" else "FINISH"
             break
             
-    # Priority 2: Check boundaries if no exact match (e.g. "I choose quant")
+    # Priority 2: Check for step followed by a colon (e.g., "quant: do this")
+    if not next_step:
+        for step in valid_steps:
+            pattern = r'\b' + re.escape(step) + r':\s*'
+            if re.search(pattern, decision, re.IGNORECASE):
+                next_step = step if step != "FINISH" else "FINISH"
+                break
+            
+    # Priority 3: Check for whole word step if no exact match or colon pattern (e.g., "I choose quant")
     if not next_step:
         for step in valid_steps:
             pattern = r'\b' + re.escape(step) + r'\b'
@@ -49,12 +90,12 @@ def supervisor_node(state: ResearchState):
                 next_step = step if step != "FINISH" else "FINISH"
                 break
             
+    # Default fallback
     if not next_step:
-        # Default fallback
-        print(f"Supervisor Warning: Could not parse decision '{decision}'. Defaulting to 'supervisor'.", file=sys.stderr)
+        print(f"Supervisor Warning: Could not parse decision. Defaulting to 'supervisor'.", file=sys.stderr)
         next_step = "supervisor"
         
-    print(f"Supervisor Decision: {next_step} (Raw: {decision[:100]}...)", file=sys.stderr)
+    # print(f"Supervisor Decision: {next_step} (Raw: {decision[:100]}...)", file=sys.stderr)
     
     # We add the supervisor's decision to the message history for transparency.
     response.name = "supervisor"
@@ -62,56 +103,90 @@ def supervisor_node(state: ResearchState):
 
 def quant_node(state: ResearchState):
     messages = [SystemMessage(content=QUANT_PROMPT)] + state['messages']
-    # Bind tools
     tools = [get_stock_price, get_financial_metrics]
     agent = llm.bind_tools(tools)
     response = agent.invoke(messages)
     
-    # Execute tools (simplified for prototype, normally we'd loop)
-    # Here we assume the LLM calls a tool, we execute it, and update state
-    # For the sake of this implementation, let's assume we extract the ticker from the task
-    # and just fetch data.
-    
-    # A better way is to use the prebuilt create_react_agent or similar, but we are building nodes manually.
-    # Let's just use the LLM to decide what to call, and if it calls a tool, we execute it.
-    
-    # To make this robust without a full tool loop in this node, we can just ask the LLM to generate the data
-    # or we can use a tool-calling agent executor.
-    
-    # Let's try to extract ticker from task
-    task = state['task']
-    # Simple heuristic: look for uppercase words that might be tickers
-    # This is very basic.
-    
-    response.content = parse_response_content(response.content)
     response.name = "quant"
-    return {"financial_data": {"status": "collected"}, "messages": [response]}
+    
+    # If it's a tool call, just pass the message
+    if response.tool_calls:
+        return {"messages": [response]}
+        
+    # Final answer: extract content and update state
+    content = parse_response_content(response.content)
+    # Since financial_data is a dict, we wrap the text content. 
+    # Ideal implementation would parse JSON, but text report is fine for now.
+    return {
+        "financial_data": {"report": content}, 
+        "messages": [response]
+    }
 
 def researcher_node(state: ResearchState):
     messages = [SystemMessage(content=RESEARCHER_PROMPT)] + state['messages']
     agent = llm.bind_tools([search_web])
     response = agent.invoke(messages)
-    response.content = parse_response_content(response.content)
+    
     response.name = "researcher"
-    return {"market_intelligence": ["Market data collected"], "messages": [response]}
+    
+    if response.tool_calls:
+        return {"messages": [response]}
+        
+    content = parse_response_content(response.content)
+    return {
+        "market_intelligence": [content], 
+        "messages": [response]
+    }
 
 def scout_node(state: ResearchState):
     messages = [SystemMessage(content=SCOUT_PROMPT)] + state['messages']
     agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)
-    response.content = parse_response_content(response.content)
+    
     response.name = "scout"
-    return {"competitor_benchmarks": ["Competitor data collected"], "messages": [response]}
+    
+    if response.tool_calls:
+        return {"messages": [response]}
+        
+    content = parse_response_content(response.content)
+    return {
+        "competitor_benchmarks": [content], 
+        "messages": [response]
+    }
 
 def writer_node(state: ResearchState):
-    messages = [SystemMessage(content=WRITER_PROMPT)] + state['messages']
+    # Construct context from state data
+    context = f"Task: {state.get('task')}\n\n"
+    
+    context += f"Financial Data: {json.dumps(state.get('financial_data', 'No financial data collected'))}\n\n"
+    context += f"Market Intelligence: {state.get('market_intelligence', 'No market intelligence collected')}\n\n"
+    context += f"Competitor Benchmarks: {state.get('competitor_benchmarks', 'No competitor benchmarks collected')}\n\n"
+    if state.get('critique'):
+        context += f"Critique from reviewer on previous draft: {state.get('critique')}\n\n"
+
+    # Add Supervisor Instructions (Last Message)
+    last_message = state.get('messages', [])[-1] if state.get('messages') else None
+    if last_message:
+        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
+        context += f"{sender} Instructions from supervisor: {last_message.content}\n"
+    
+    messages = [
+        SystemMessage(content=WRITER_PROMPT),
+        HumanMessage(content=context)
+    ]
+    
     response = llm.invoke(messages)
     content = parse_response_content(response.content)
     response.name = "writer"
-    return {"draft_report": content, "critique": "", "messages": [response]}
+    revision_count = state.get("revision_count", 0) + 1
+    return {"draft_report": content, "critique": "", "messages": [response], "revision_count": revision_count}
 
 def reviewer_node(state: ResearchState):
-    messages = [SystemMessage(content=REVIEWER_PROMPT), HumanMessage(content=state['draft_report'])]
+    messages = [
+        SystemMessage(content=REVIEWER_PROMPT), 
+        HumanMessage(content=f"Original Task & Clarifications:\n{state.get('task')}\n\nDraft Report to Review:\n{state.get('draft_report', 'No report drafted.')}")
+    ]
+    
     response = llm.invoke(messages)
     content = parse_response_content(response.content)
     response.name = "reviewer"

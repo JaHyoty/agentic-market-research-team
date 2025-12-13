@@ -16,7 +16,7 @@ if [ -f "venv/bin/activate" ]; then
 fi
 export AWS_ENDPOINT_URL=http://localhost:4566
 export SQS_QUEUE_URL=http://localhost:4566/000000000000/market-research-tasks
-python3 local-dev/trigger_task.py
+python3 local-dev/scripts/trigger_task.py
 
 # 3. Monitor scaling
 echo "Monitoring worker pods (KEDA should scale up)..."

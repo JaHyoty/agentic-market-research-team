@@ -3,7 +3,9 @@ from backend.app.config import settings
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
+from langchain_core.messages import messages_to_dict, messages_from_dict
 import markdown
+import json
 import io
 
 def parse_response_content(content):
@@ -80,7 +82,7 @@ def upload_to_s3(file_obj, bucket, key):
     s3.upload_fileobj(file_obj, bucket, key)
     return f"s3://{bucket}/{key}"
 
-def update_task_status(task_id, status, progress=None, report_url=None):
+def update_task_status(task_id, status, progress=None, report_url=None, state=None):
     dynamodb = get_boto3_client("dynamodb")
     
     update_expression = "SET #s = :s"
@@ -98,6 +100,11 @@ def update_task_status(task_id, status, progress=None, report_url=None):
         expression_attribute_names["#r"] = "report_url"
         expression_attribute_values[":r"] = {"S": report_url}
         
+    if state:
+        update_expression += ", #st = :st"
+        expression_attribute_names["#st"] = "state"
+        expression_attribute_values[":st"] = {"S": state}
+        
     dynamodb.update_item(
         TableName=settings.DYNAMODB_TABLE_TASKS,
         Key={"task_id": {"S": task_id}},
@@ -105,3 +112,18 @@ def update_task_status(task_id, status, progress=None, report_url=None):
         ExpressionAttributeNames=expression_attribute_names,
         ExpressionAttributeValues=expression_attribute_values
     )
+
+def serialize_state(state):
+    """Serialize ResearchState to a JSON string."""
+    state_copy = state.copy()
+    if 'messages' in state_copy:
+        state_copy['messages'] = messages_to_dict(state_copy['messages'])
+    return json.dumps(state_copy)
+
+def deserialize_state(json_str):
+    """Deserialize JSON string back to ResearchState."""
+    data = json.loads(json_str)
+    if 'messages' in data:
+        data['messages'] = messages_from_dict(data['messages'])
+    return data
+

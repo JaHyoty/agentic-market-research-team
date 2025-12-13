@@ -54,7 +54,7 @@ def trigger_and_watch():
                 if pod.status.phase == "Running":
                     # Check recent logs
                     try:
-                        logs = v1.read_namespaced_pod_log(name=pod.metadata.name, namespace="default", tail_lines=20)
+                        logs = v1.read_namespaced_pod_log(name=pod.metadata.name, namespace="default", tail_lines=200)
                         if f"Processing task {task_id}" in logs:
                             target_pod = pod.metadata.name
                             print(f"\nFound worker: {target_pod}")

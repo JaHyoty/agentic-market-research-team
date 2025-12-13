@@ -5,7 +5,7 @@ import sys
 import io
 from datetime import datetime
 from backend.app.config import settings
-from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3, parse_response_content
+from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3, parse_response_content, deserialize_state, serialize_state
 from backend.app.graph.graph import create_graph
 from langchain_core.messages import HumanMessage
 
@@ -21,12 +21,52 @@ def process_message(message, sqs_client, queue_url):
         query = body.get('query')
         receipt_handle = message['ReceiptHandle']
         
-        if not task_id or not query:
-            print("Invalid message format")
-            return
+        if not task_id:
+            raise ValueError("Invalid message format: missing task_id")
             
-        print(f"Processing task {task_id}: {query}")
-        update_task_status(task_id, "PROCESSING", progress=[f"Started processing: {query}"])
+        # Check for saved state (resume)
+        dynamodb = get_boto3_client("dynamodb")
+        item = dynamodb.get_item(
+            TableName=settings.DYNAMODB_TABLE_TASKS,
+            Key={"task_id": {"S": task_id}},
+            ConsistentRead=True
+        ).get('Item', {})
+        
+        saved_state_str = item.get('state', {}).get('S')
+        clarification_answer = item.get('clarification_answer', {}).get('S')
+        
+        print(f"DEBUG: Task {task_id} state loaded. State len: {len(saved_state_str) if saved_state_str else 0}, Answer: {clarification_answer}", file=sys.stderr)
+        
+        initial_state = None
+        if saved_state_str and clarification_answer:
+            print(f"Resuming task {task_id} with answer.", file=sys.stderr)
+            update_task_status(task_id, "PROCESSING", progress=[f"Resuming with answer: {clarification_answer}"])
+            
+            # Deserialize
+            initial_state = deserialize_state(saved_state_str)
+            
+            # Reset state for resumption
+            initial_state['next_step'] = None
+            initial_state['clarification_question'] = None
+            
+            # Update task definition with clarification
+            initial_state['task'] += f"\n\nClarification: {clarification_answer}"
+            
+            # Inject answer as user message
+            initial_state['messages'].append(HumanMessage(content=clarification_answer))
+            
+            # Clean up answer from DB (optional, but cleaner)
+            dynamodb.update_item(
+            TableName=settings.DYNAMODB_TABLE_TASKS,
+            Key={"task_id": {"S": task_id}},
+            UpdateExpression="REMOVE clarification_answer"
+            )
+        else:
+            if not query:
+                raise ValueError("Invalid message format: missing query")
+
+            print(f"Processing task {task_id}: {query}")
+            update_task_status(task_id, "PROCESSING", progress=[f"Started processing: {query}"])
         
         # Start Heartbeat
         def heartbeat():
@@ -51,12 +91,13 @@ def process_message(message, sqs_client, queue_url):
         app = create_graph()
         
         # Run graph
-        initial_state = {
-            "task": query,
-            "messages": [HumanMessage(content=query)],
-            "revision_count": 0,
-            "date": datetime.now().strftime("%Y-%m-%d")
-        }
+        if not initial_state:
+            initial_state = {
+                "task": query,
+                "messages": [HumanMessage(content=query)],
+                "revision_count": 0,
+                "date": datetime.now().strftime("%Y-%m-%d")
+            }
         
         # Run graph with streaming for visibility
         final_state = initial_state
@@ -69,7 +110,26 @@ def process_message(message, sqs_client, queue_url):
                 content_text = parse_response_content(last_message.content)
                 content_preview = content_text[:70] + "..." if len(content_text) > 70 else content_text
                 sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Unknown"
-                print(f"--- State Updated. Last Message: {type(last_message).__name__} ({sender}): {content_preview} ---", file=sys.stderr)
+                print(f"--- State Updated. Last Message: {type(last_message).__name__} ({sender}): {content_preview}", file=sys.stderr)
+                
+            # Check for clarification request
+            if final_state.get('next_step') == 'ask_question':
+                question = final_state.get('clarification_question', 'Clarification needed.')
+                print(f"--- Pausing for clarification: {question}", file=sys.stderr)
+                
+                # Serialize state
+                serialized_state = serialize_state(final_state)
+                
+                # Update status and save state
+                update_task_status(
+                    task_id, 
+                    "CLARIFICATION_REQUIRED", 
+                    progress=[f"Clarification asked: {question}"], 
+                    state=serialized_state
+                )
+                print(f"Task {task_id} paused for clarification.")
+                return # Exit processing, do not generate report
+
         print("Graph execution completed.", file=sys.stderr)
         
         # Extract report

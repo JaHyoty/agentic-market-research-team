@@ -24,59 +24,125 @@ def submit_handler(event, context):
         body = json.loads(event.get('body', '{}'))
         query = body.get('query')
         
-        if not query:
+        if query:
+            # NEW TASK START
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    task_id = str(uuid.uuid4())
+                    timestamp = datetime.utcnow().isoformat()
+                    
+                    # 2. Write to DynamoDB
+                    dynamodb.put_item(
+                        TableName=DYNAMODB_TABLE,
+                        Item={
+                            "task_id": {"S": task_id},
+                            "status": {"S": "QUEUED"},
+                            "progress": {"L": []},
+                            "created_at": {"S": timestamp}
+                        },
+                        ConditionExpression='attribute_not_exists(task_id)'
+                    )
+                    break # Success
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                        if attempt == max_retries - 1:
+                            raise Exception("Failed to generate unique task_id after multiple attempts")
+                        continue # Try again with new ID
+                    raise e
+
+            # 1. Push to SQS (moved after DB write to ensure DB record exists first)
+            sqs.send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "task_id": task_id,
+                    "query": query
+                })
+            )
+            
             return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Missing query parameter'})
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'task_id': task_id,
+                    'status': 'QUEUED',
+                    'message': 'Research task submitted successfully'
+                })
             }
             
-
-        max_retries = 3
-        for attempt in range(max_retries):
+        elif body.get('task_id') and body.get('answer'):
+            # RESUME TASK
+            task_id = body.get('task_id')
+            answer = body.get('answer')
+            
+            # Check current status
             try:
-                task_id = str(uuid.uuid4())
-                timestamp = datetime.utcnow().isoformat()
-                
-                # 2. Write to DynamoDB
-                dynamodb.put_item(
+                response = dynamodb.get_item(
                     TableName=DYNAMODB_TABLE,
-                    Item={
-                        "task_id": {"S": task_id},
-                        "status": {"S": "QUEUED"},
-                        "progress": {"L": []},
-                        "created_at": {"S": timestamp}
-                    },
-                    ConditionExpression='attribute_not_exists(task_id)'
+                    Key={'task_id': {'S': task_id}}
                 )
-                break # Success
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                    if attempt == max_retries - 1:
-                        raise Exception("Failed to generate unique task_id after multiple attempts")
-                    continue # Try again with new ID
-                raise e
-
-        # 1. Push to SQS (moved after DB write to ensure DB record exists first)
-        sqs.send_message(
-            QueueUrl=SQS_QUEUE_URL,
-            MessageBody=json.dumps({
-                "task_id": task_id,
-                "query": query
-            })
-        )
-        
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'task_id': task_id,
-                'status': 'QUEUED',
-                'message': 'Research task submitted successfully'
-            })
-        }
+                item = response.get('Item')
+                if not item:
+                    return {
+                        'statusCode': 404,
+                        'body': json.dumps({'error': 'Task not found'})
+                    }
+                
+                current_status = item.get('status', {}).get('S')
+                if current_status != 'CLARIFICATION_REQUIRED':
+                    return {
+                        'statusCode': 400,
+                        'body': json.dumps({'error': f'Task is in {current_status} state, cannot answer clarification.'})
+                    }
+                    
+                # Update DynamoDB with answer and set back to QUEUED
+                dynamodb.update_item(
+                    TableName=DYNAMODB_TABLE,
+                    Key={'task_id': {'S': task_id}},
+                    UpdateExpression="SET #s = :s, #a = :a",
+                    ExpressionAttributeNames={'#s': 'status', '#a': 'clarification_answer'},
+                    ExpressionAttributeValues={
+                        ':s': {'S': 'QUEUED'},
+                        ':a': {'S': answer}
+                    }
+                )
+                
+                # Push Resume Message to SQS
+                sqs.send_message(
+                    QueueUrl=SQS_QUEUE_URL,
+                    MessageBody=json.dumps({
+                        "task_id": task_id,
+                        "info": "RESUME_WORKFLOW"
+                    })
+                )
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'task_id': task_id,
+                        'status': 'QUEUED',
+                        'message': 'Clarification answer submitted. Research resuming.'
+                    })
+                }
+                
+            except Exception as e:
+                print(f"Error resuming task: {e}")
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps({'error': f'Error resuming task: {str(e)}'})
+                }
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Missing query OR (task_id and answer)'})
+            }
         
     except Exception as e:
         print(f"Error: {str(e)}")

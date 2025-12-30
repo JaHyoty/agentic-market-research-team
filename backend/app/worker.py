@@ -102,7 +102,7 @@ def process_message(message, sqs_client, queue_url):
         # Run graph with streaming for visibility
         final_state = initial_state
         print("Starting graph execution...", file=sys.stderr)
-        for step_state in app.stream(initial_state, stream_mode="values"):
+        for step_state in app.stream(initial_state, stream_mode="values", config={"recursion_limit": 100}):
             final_state = step_state
             # Log progress based on state changes
             last_message = final_state['messages'][-1] if final_state.get('messages') else None

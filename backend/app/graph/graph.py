@@ -3,6 +3,7 @@ import re
 from langgraph.prebuilt import ToolNode, tools_condition
 from backend.app.tools.search import search_web
 from backend.app.tools.web import scrape_website
+from backend.app.tools.finance import get_stock_price, get_financial_metrics
 from backend.app.models.state import ResearchState
 from backend.app.agents.nodes import (
     supervisor_node,
@@ -25,8 +26,9 @@ def create_graph():
     workflow.add_node("reviewer", reviewer_node)
     
     # Tool Nodes
-    workflow.add_node("researcher_tools", ToolNode([search_web]))
+    workflow.add_node("researcher_tools", ToolNode([search_web, scrape_website]))
     workflow.add_node("scout_tools", ToolNode([search_web, scrape_website]))
+    workflow.add_node("quant_tools", ToolNode([search_web, scrape_website, get_stock_price, get_financial_metrics]))
     
     # Set entry point
     workflow.set_entry_point("supervisor")
@@ -74,6 +76,14 @@ def create_graph():
         {"tools": "scout_tools", END: "supervisor"}
     )
     workflow.add_edge("scout_tools", "scout")
+    
+    # Quant Loop
+    workflow.add_conditional_edges(
+        "quant",
+        tools_condition,
+        {"tools": "quant_tools", END: "supervisor"}
+    )
+    workflow.add_edge("quant_tools", "quant")
     
     # Writer goes to supervisor (which will route to reviewer)
     workflow.add_edge("writer", "supervisor")

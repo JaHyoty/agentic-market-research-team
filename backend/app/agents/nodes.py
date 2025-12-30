@@ -6,11 +6,10 @@ from backend.app.tools.search import search_web
 from backend.app.tools.finance import get_stock_price, get_financial_metrics
 from backend.app.tools.web import scrape_website
 from backend.app.utils import parse_response_content
+from backend.app.config import settings
 import re
 import json
-
 import sys
-from backend.app.config import settings
 
 print(f"Initializing ChatOpenRouter with API Key present: {bool(settings.OPENROUTER_API_KEY)}", file=sys.stderr)
 
@@ -36,17 +35,15 @@ def supervisor_node(state: ResearchState):
     
     if state.get('draft_report'):
         context += f"Reviewer Critique: {state.get('critique', 'No critique on draft report provided')}\n"
-
-    # We add the last message if it's from a tool or relevant, 
-    # but the user requested to avoid agent instructions. 
-    # Let's trust the state data.
     
+    # Invoke LLM with context
     messages = [
         SystemMessage(content=SUPERVISOR_PROMPT),
         HumanMessage(content=context)
     ]
-    
     response = llm.invoke(messages)
+    
+    # Parse response content
     decision = parse_response_content(response.content).strip()
     
     # Basic validation/cleanup of the decision
@@ -102,8 +99,26 @@ def supervisor_node(state: ResearchState):
     return {"next_step": next_step, "messages": [response]}
 
 def quant_node(state: ResearchState):
-    messages = [SystemMessage(content=QUANT_PROMPT)] + state['messages']
-    tools = [get_stock_price, get_financial_metrics]
+    # Construct context
+    context = f""
+
+    # Add existing financial data if any
+    if state.get('financial_data'):
+        context += f"Existing Financial Data: {state.get('financial_data')}\n\n"
+    
+    # Add Supervisor Instructions (Last Message)
+    last_message = state.get('messages', [])[-1] if state.get('messages') else None
+    if last_message:
+        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
+        context += f"Instructions from {sender}: {last_message.content}\n"
+    
+    messages = [
+        SystemMessage(content=QUANT_PROMPT),
+        HumanMessage(content=context)
+    ]
+
+    # Bind tools to LLM and call the agent
+    tools = [search_web, scrape_website, get_stock_price, get_financial_metrics]
     agent = llm.bind_tools(tools)
     response = agent.invoke(messages)
     
@@ -123,8 +138,25 @@ def quant_node(state: ResearchState):
     }
 
 def researcher_node(state: ResearchState):
-    messages = [SystemMessage(content=RESEARCHER_PROMPT)] + state['messages']
-    agent = llm.bind_tools([search_web])
+    # Construct context from state data
+    context = f"Task: {state.get('task')}\n\n"
+
+    # Add existing market intelligence if any
+    if state.get('market_intelligence'):
+        context += f"Existing Market Intelligence: {state.get('market_intelligence')}\n\n"
+    
+    # Add Supervisor Instructions (Last Message)
+    last_message = state.get('messages', [])[-1] if state.get('messages') else None
+    if last_message:
+        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
+        context += f"Instructions from {sender}: {last_message.content}\n"
+    
+    messages = [
+        SystemMessage(content=RESEARCHER_PROMPT),
+        HumanMessage(content=context)
+    ]
+    
+    agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)
     
     response.name = "researcher"
@@ -138,8 +170,25 @@ def researcher_node(state: ResearchState):
         "messages": [response]
     }
 
-def scout_node(state: ResearchState):
-    messages = [SystemMessage(content=SCOUT_PROMPT)] + state['messages']
+def scout_node(state: ResearchState):    
+    # Construct context
+    context = f""
+    
+    # Add existing competitor benchmarks if any
+    if state.get('competitor_benchmarks'):
+        context += f"Existing Competitor Benchmarks: {state.get('competitor_benchmarks')}\n\n"
+    
+    # Add Supervisor Instructions (Last Message)
+    last_message = state.get('messages', [])[-1] if state.get('messages') else None
+    if last_message:
+        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
+        context += f"Instructions from {sender}: {last_message.content}\n"
+    
+    messages = [
+        SystemMessage(content=SCOUT_PROMPT),
+        HumanMessage(content=context)
+    ]
+    
     agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)
     

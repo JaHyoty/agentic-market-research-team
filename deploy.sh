@@ -112,6 +112,8 @@ EOF
     
     echo "Restarting worker deployment to pick up new image..."
     kubectl rollout restart deployment/market-research-worker
+    echo "Waiting for worker to roll out..."
+    kubectl rollout status deployment/market-research-worker
 
 elif [ "$ENVIRONMENT" == "cloud" ]; then
     if [ -z "$ECR_REGISTRY" ]; then

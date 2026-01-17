@@ -5,7 +5,7 @@ import sys
 import io
 from datetime import datetime
 from backend.app.config import settings
-from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3, parse_response_content, deserialize_state, serialize_state
+from backend.app.utils import get_boto3_client, update_task_status, upload_to_s3, parse_response_content, deserialize_state, serialize_state, create_agent_event
 from backend.app.graph.graph import create_graph
 from langchain_core.messages import HumanMessage
 
@@ -40,7 +40,11 @@ def process_message(message, sqs_client, queue_url):
         initial_state = None
         if saved_state_str and clarification_answer:
             print(f"Resuming task {task_id} with answer.", file=sys.stderr)
-            update_task_status(task_id, "PROCESSING", progress=[f"Resuming with answer: {clarification_answer}"])
+            update_task_status(task_id, "PROCESSING", events=[create_agent_event(
+                agent="system",
+                action="info",
+                message=f"Resuming with answer: {clarification_answer}"
+            )])
             
             # Deserialize
             initial_state = deserialize_state(saved_state_str)
@@ -66,7 +70,11 @@ def process_message(message, sqs_client, queue_url):
                 raise ValueError("Invalid message format: missing query")
 
             print(f"Processing task {task_id}: {query}")
-            update_task_status(task_id, "PROCESSING", progress=[f"Started processing: {query}"])
+            update_task_status(task_id, "PROCESSING", events=[create_agent_event(
+                agent="system",
+                action="info",
+                message=f"Started processing: {query}"
+            )])
         
         # Start Heartbeat
         def heartbeat():
@@ -101,16 +109,66 @@ def process_message(message, sqs_client, queue_url):
         
         # Run graph with streaming for visibility
         final_state = initial_state
+        last_event_count = 0  # Track events to avoid duplicate updates
         print("Starting graph execution...", file=sys.stderr)
+        
         for step_state in app.stream(initial_state, stream_mode="values", config={"recursion_limit": 100}):
             final_state = step_state
-            # Log progress based on state changes
-            last_message = final_state['messages'][-1] if final_state.get('messages') else None
-            if last_message:
-                content_text = parse_response_content(last_message.content)
-                content_preview = content_text[:70] + "..." if len(content_text) > 70 else content_text
-                sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Unknown"
-                print(f"--- State Updated. Last Message: {type(last_message).__name__} ({sender}): {content_preview}", file=sys.stderr)
+            
+            # Get the last message for event creation
+            messages = final_state.get('messages', [])
+            if not messages:
+                continue
+                
+            last_message = messages[-1]
+            msg_type = type(last_message).__name__
+            agent_name = getattr(last_message, 'name', None) or "system"
+            content_text = parse_response_content(last_message.content)
+            content_preview = content_text[:100] + "..." if len(content_text) > 100 else content_text
+            
+            print(f"--- State Updated. {msg_type} ({agent_name}): {content_preview[:70]}", file=sys.stderr)
+            
+            # Determine action type based on message type
+            if msg_type == "ToolMessage":
+                # Tool result
+                tool_name = agent_name  # ToolMessage.name is the tool name
+                event = create_agent_event(
+                    agent=tool_name,
+                    action="tool_result",
+                    message=f"Tool '{tool_name}' returned result",
+                    details={"preview": content_preview}
+                )
+            elif msg_type == "AIMessage" and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                # Agent making a tool call
+                for tool_call in last_message.tool_calls:
+                    tool_name = tool_call.get('name', 'unknown')
+                    tool_args = tool_call.get('args', {})
+                    tool_msg = json.dumps(tool_args) if tool_args else f"Calling tool '{tool_name}'"
+                    event = create_agent_event(
+                        agent=agent_name,
+                        action="tool_call",
+                        message=tool_msg,
+                        details={"tool": tool_name}
+                    )
+                    update_task_status(task_id, "PROCESSING", events=[event])
+                continue  # Skip the regular event update for tool calls
+            elif msg_type == "AIMessage":
+                # Agent produced a result/thinking
+                event = create_agent_event(
+                    agent=agent_name,
+                    action="result",
+                    message=content_preview
+                )
+            else:
+                # Human message or other
+                event = create_agent_event(
+                    agent="user",
+                    action="input",
+                    message=content_preview
+                )
+            
+            # Emit structured event to DynamoDB
+            update_task_status(task_id, "PROCESSING", events=[event])
                 
             # Check for clarification request
             if final_state.get('next_step') == 'ask_question':
@@ -120,11 +178,18 @@ def process_message(message, sqs_client, queue_url):
                 # Serialize state
                 serialized_state = serialize_state(final_state)
                 
+                # Emit clarification event
+                clarification_event = create_agent_event(
+                    agent="supervisor",
+                    action="clarification",
+                    message=question
+                )
+                
                 # Update status and save state
                 update_task_status(
                     task_id, 
                     "CLARIFICATION_REQUIRED", 
-                    progress=[f"Clarification asked: {question}"], 
+                    events=[clarification_event],
                     state=serialized_state
                 )
                 print(f"Task {task_id} paused for clarification.")
@@ -170,9 +235,15 @@ def process_message(message, sqs_client, queue_url):
         log_url = upload_to_s3(log_buffer, settings.S3_BUCKET_REPORTS, log_key)
         print(f"--- Logs uploaded to S3. URL: {log_url} ---", file=sys.stderr)
         
-        # Update status
+        # Update status with completion event
         print(f"--- Updating task status to COMPLETED for task {task_id} ---", file=sys.stderr)
-        update_task_status(task_id, "COMPLETED", progress=["Report generated"], report_url=s3_url)
+        completion_event = create_agent_event(
+            agent="system",
+            action="complete",
+            message="Research report generated successfully",
+            details={"report_url": s3_url}
+        )
+        update_task_status(task_id, "COMPLETED", events=[completion_event], report_url=s3_url)
 
         print(f"Task {task_id} completed.")
         
@@ -180,7 +251,12 @@ def process_message(message, sqs_client, queue_url):
         print(f"Error processing message: {e}")
         traceback.print_exc()
         if task_id:
-            update_task_status(task_id, "FAILED", progress=[f"Error: {str(e)}"])
+            error_event = create_agent_event(
+                agent="system",
+                action="error",
+                message=f"Task failed: {str(e)}"
+            )
+            update_task_status(task_id, "FAILED", events=[error_event])
         print(f"Task {task_id} failed.")
 
     finally:

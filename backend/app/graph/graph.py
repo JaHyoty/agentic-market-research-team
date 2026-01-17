@@ -58,8 +58,8 @@ def create_graph():
         }
     )
     
-    # Workers go back to supervisor
-    workflow.add_edge("quant", "supervisor")
+    # Note: All worker nodes use conditional edges (tools or supervisor)
+    # so no direct edges needed here
     
     # Researcher Loop
     workflow.add_conditional_edges(

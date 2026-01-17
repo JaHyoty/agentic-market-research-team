@@ -52,9 +52,30 @@ def supervisor_node(state: ResearchState):
     # Use regex to find whole words to avoid partial matches (e.g. "quant" in "Quantification")
     next_step = None
     
-    # Priority 0: Check for ask_question
-    if decision.startswith("ask_question:"):
-        question = decision.split(":", 1)[1].strip()
+    # Priority 0: Check for ask_question (handles multiple formats)
+    # Format 1: "ask_question: What is X?"
+    # Format 2: "ask_question\nWhat is X?"
+    # Format 3: Just "ask_question" followed by content
+    if "ask_question" in decision.lower():
+        # Try to extract the question
+        question = ""
+        
+        # Try colon separator first
+        if ":" in decision:
+            parts = decision.split(":", 1)
+            if "ask_question" in parts[0].lower():
+                question = parts[1].strip()
+        
+        # Try newline separator
+        if not question and "\n" in decision:
+            lines = decision.split("\n", 1)
+            if "ask_question" in lines[0].lower() and len(lines) > 1:
+                question = lines[1].strip()
+        
+        # Default question if we couldn't extract one
+        if not question:
+            question = "Could you please clarify your research objective?"
+        
         next_step = "ask_question"
         print(f"Supervisor Decision: ASK QUESTION -> {question}", file=sys.stderr)
         response.name = "supervisor"
@@ -89,10 +110,10 @@ def supervisor_node(state: ResearchState):
             
     # Default fallback
     if not next_step:
-        print(f"Supervisor Warning: Could not parse decision. Defaulting to 'supervisor'.", file=sys.stderr)
+        print(f"Supervisor Warning: Could not parse decision '{decision[:50]}...'. Defaulting to 'supervisor'.", file=sys.stderr)
         next_step = "supervisor"
         
-    # print(f"Supervisor Decision: {next_step} (Raw: {decision[:100]}...)", file=sys.stderr)
+    print(f"Supervisor Decision: {next_step}", file=sys.stderr)
     
     # We add the supervisor's decision to the message history for transparency.
     response.name = "supervisor"
@@ -145,16 +166,22 @@ def researcher_node(state: ResearchState):
     if state.get('market_intelligence'):
         context += f"Existing Market Intelligence: {state.get('market_intelligence')}\n\n"
     
-    # Add Supervisor Instructions (Last Message)
-    last_message = state.get('messages', [])[-1] if state.get('messages') else None
-    if last_message:
-        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
-        context += f"Instructions from {sender}: {last_message.content}\n"
+    # Add Supervisor Instructions (Last Message) - REMOVED from context, will be in history
     
+    # Filter for relevant history (since last Supervisor message)
+    state_messages = state.get('messages', [])
+    start_index = 0
+    for i in range(len(state_messages) - 1, -1, -1):
+        m = state_messages[i]
+        if getattr(m, 'name', '') == 'supervisor':
+            start_index = i
+            break
+            
+    recent_history = state_messages[start_index:] if state_messages else []
+
     messages = [
-        SystemMessage(content=RESEARCHER_PROMPT),
-        HumanMessage(content=context)
-    ]
+        SystemMessage(content=RESEARCHER_PROMPT + "\n\n" + context),
+    ] + recent_history
     
     agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)
@@ -178,16 +205,22 @@ def scout_node(state: ResearchState):
     if state.get('competitor_benchmarks'):
         context += f"Existing Competitor Benchmarks: {state.get('competitor_benchmarks')}\n\n"
     
-    # Add Supervisor Instructions (Last Message)
-    last_message = state.get('messages', [])[-1] if state.get('messages') else None
-    if last_message:
-        sender = last_message.name if hasattr(last_message, 'name') and last_message.name else "Supervisor"
-        context += f"Instructions from {sender}: {last_message.content}\n"
+    # Add Supervisor Instructions (Last Message) - REMOVED from context, will be in history
     
+    # Filter for relevant history (since last Supervisor message)
+    state_messages = state.get('messages', [])
+    start_index = 0
+    for i in range(len(state_messages) - 1, -1, -1):
+        m = state_messages[i]
+        if getattr(m, 'name', '') == 'supervisor':
+            start_index = i
+            break
+            
+    recent_history = state_messages[start_index:] if state_messages else []
+
     messages = [
-        SystemMessage(content=SCOUT_PROMPT),
-        HumanMessage(content=context)
-    ]
+        SystemMessage(content=SCOUT_PROMPT + "\n\n" + context),
+    ] + recent_history
     
     agent = llm.bind_tools([search_web, scrape_website])
     response = agent.invoke(messages)

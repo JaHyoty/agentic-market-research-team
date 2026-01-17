@@ -7,6 +7,36 @@ from langchain_core.messages import messages_to_dict, messages_from_dict
 import markdown
 import json
 import io
+from datetime import datetime
+from typing import Optional, Dict, Any, List, Union
+
+
+def create_agent_event(
+    agent: str,
+    action: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Create a structured event for real-time agent visualization.
+    
+    Args:
+        agent: Agent name (supervisor, researcher, quant, scout, writer, reviewer, or tool name)
+        action: Event type - 'thinking', 'tool_call', 'tool_result', 'result', 'error'
+        message: Human-readable description of what's happening
+        details: Optional additional data (tool args, results preview, etc.)
+    
+    Returns:
+        Structured event dict ready for DynamoDB storage
+    """
+    event = {
+        "agent": agent,
+        "action": action,
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+    if details:
+        event["details"] = details
+    return event
 
 def parse_response_content(content):
     if isinstance(content, str):
@@ -82,17 +112,27 @@ def upload_to_s3(file_obj, bucket, key):
     s3.upload_fileobj(file_obj, bucket, key)
     return f"s3://{bucket}/{key}"
 
-def update_task_status(task_id, status, progress=None, report_url=None, state=None):
+def update_task_status(task_id, status, report_url=None, state=None, events=None):
+    """Update task status in DynamoDB.
+    
+    Args:
+        task_id: Task identifier
+        status: Task status string
+        report_url: S3 URL of the final report
+        state: Serialized graph state for resumption
+        events: List of structured event dicts from create_agent_event()
+    """
     dynamodb = get_boto3_client("dynamodb")
     
     update_expression = "SET #s = :s"
     expression_attribute_names = {"#s": "status"}
     expression_attribute_values = {":s": {"S": status}}
     
-    if progress:
-        update_expression += ", #p = list_append(if_not_exists(#p, :empty_list), :p)"
-        expression_attribute_names["#p"] = "progress"
-        expression_attribute_values[":p"] = {"L": [{"S": p} for p in progress]}
+    if events:
+        # Store events as JSON strings in DynamoDB list
+        update_expression += ", #e = list_append(if_not_exists(#e, :empty_list), :e)"
+        expression_attribute_names["#e"] = "events"
+        expression_attribute_values[":e"] = {"L": [{"S": json.dumps(e)} for e in events]}
         expression_attribute_values[":empty_list"] = {"L": []}
         
     if report_url:

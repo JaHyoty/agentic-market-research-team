@@ -24,23 +24,33 @@ def submit_handler(event, context):
         body = json.loads(event.get('body', '{}'))
         query = body.get('query')
         
+        # Extract browser session ID from headers
+        headers = event.get('headers', {})
+        browser_session_id = headers.get('x-browser-session-id') or headers.get('X-Browser-Session-Id', '')
+        
         if query:
             # NEW TASK START
-            max_retries = 3
+            max_retries = 3 # Allow for 3 tries to generate a unique task_id
             for attempt in range(max_retries):
                 try:
                     task_id = str(uuid.uuid4())
                     timestamp = datetime.utcnow().isoformat()
                     
                     # 2. Write to DynamoDB
+                    item = {
+                        "task_id": {"S": task_id},
+                        "status": {"S": "QUEUED"},
+                        "events": {"L": []},
+                        "query": {"S": query},
+                        "created_at": {"S": timestamp}
+                    }
+                    # Store browser session ID if provided
+                    if browser_session_id:
+                        item["browser_session_id"] = {"S": browser_session_id}
+                    
                     dynamodb.put_item(
                         TableName=DYNAMODB_TABLE,
-                        Item={
-                            "task_id": {"S": task_id},
-                            "status": {"S": "QUEUED"},
-                            "progress": {"L": []},
-                            "created_at": {"S": timestamp}
-                        },
+                        Item=item,
                         ConditionExpression='attribute_not_exists(task_id)'
                     )
                     break # Success
@@ -63,8 +73,7 @@ def submit_handler(event, context):
             return {
                 'statusCode': 200,
                 'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
+                    'Content-Type': 'application/json'
                 },
                 'body': json.dumps({
                     'task_id': task_id,
@@ -122,8 +131,7 @@ def submit_handler(event, context):
                 return {
                     'statusCode': 200,
                     'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
+                        'Content-Type': 'application/json'
                     },
                     'body': json.dumps({
                         'task_id': task_id,
@@ -178,25 +186,89 @@ def get_status_handler(event, context):
         # DynamoDB returns types like {'S': 'val'}, we need to unmarshal or manually extract
         status = item.get('status', {}).get('S', 'UNKNOWN')
         report_url = item.get('report_url', {}).get('S')
+        query = item.get('query', {}).get('S')
+        created_at = item.get('created_at', {}).get('S')
         
-        # Progress logs are a list of strings
-        progress_items = item.get('progress', {}).get('L', [])
-        progress_logs = [p.get('S') for p in progress_items if p.get('S')]
+        # Structured events (list of JSON strings)
+        events_items = item.get('events', {}).get('L', [])
+        events = []
+        for e in events_items:
+            event_str = e.get('S')
+            if event_str:
+                try:
+                    events.append(json.loads(event_str))
+                except json.JSONDecodeError:
+                    pass  # Skip malformed events
 
         return {
             'statusCode': 200,
             'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
+                'Content-Type': 'application/json'
             },
             'body': json.dumps({
                 'task_id': task_id,
                 'status': status,
-                'progress': progress_logs,
-                'report_url': report_url
+                'events': events,
+                'report_url': report_url,
+                'query': query,
+                'created_at': created_at
             })
         }
 
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': 'Internal Server Error'})
+        }
+
+def list_sessions_handler(event, context):
+    """List research sessions for this browser's session."""
+    print(f"Received list_sessions event: {json.dumps(event)}")
+    
+    try:
+        # Extract browser session ID from headers
+        headers = event.get('headers', {})
+        browser_session_id = headers.get('x-browser-session-id') or headers.get('X-Browser-Session-Id', '')
+        
+        if not browser_session_id:
+            # No session ID, return empty list
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({'sessions': []})
+            }
+        
+        # Query for tasks belonging to this browser session
+        # Note: 'query' and 'status' are reserved keywords in DynamoDB
+        response = dynamodb.scan(
+            TableName=DYNAMODB_TABLE,
+            ProjectionExpression="task_id, #s, created_at, #q, browser_session_id",
+            FilterExpression="browser_session_id = :bsid",
+            ExpressionAttributeNames={"#s": "status", "#q": "query"},
+            ExpressionAttributeValues={":bsid": {"S": browser_session_id}}
+        )
+        
+        sessions = []
+        for item in response.get('Items', []):
+            sessions.append({
+                'task_id': item.get('task_id', {}).get('S'),
+                'status': item.get('status', {}).get('S'),
+                'created_at': item.get('created_at', {}).get('S'),
+                'query': item.get('query', {}).get('S')
+            })
+        
+        # Sort by created_at descending (handle None values)
+        sessions.sort(key=lambda x: x.get('created_at') or '', reverse=True)
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json'
+            },
+            'body': json.dumps({'sessions': sessions})
+        }
+        
     except Exception as e:
         print(f"Error: {str(e)}")
         return {

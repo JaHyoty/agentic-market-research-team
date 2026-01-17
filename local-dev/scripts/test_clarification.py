@@ -32,15 +32,14 @@ def test_clarification_flow():
         if status_res.status_code == 200:
             data = status_res.json()
             status = data['status']
-            progress = data.get('progress', [])
+            events = data.get('events', [])
             print(f"   Status: {status}")
             
             if status == "CLARIFICATION_REQUIRED":
-                # Extract question from progress if possible, or just assume success
-                # Our worker implementation logs "Clarification asked: <Question>"
-                for log in progress:
-                    if "Clarification asked:" in log:
-                        clarification_question = log
+                # Extract question from events
+                for event in events:
+                    if event.get('action') == 'clarification':
+                        clarification_question = event.get('message')
                 print(f"   Clarification Requested: {clarification_question}")
                 break
         else:

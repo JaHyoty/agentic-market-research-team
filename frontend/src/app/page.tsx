@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { 
   submitResearch, 
+  answerClarification,
   getTaskStatus, 
   getSessions as fetchSessions,
   pollTaskEvents,
+  getReportUrl,
   AgentEvent,
   SessionSummary 
 } from '@/lib/api';
@@ -29,10 +31,12 @@ const KNOWN_AGENTS = ['supervisor', 'researcher', 'scout', 'quant', 'writer', 'r
 export default function Home() {
   const [query, setQuery] = useState('');
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [taskQuery, setTaskQuery] = useState<string | null>(null); // Original research goal
   const [status, setStatus] = useState<string>('IDLE');
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   // Session management
@@ -42,8 +46,8 @@ export default function Home() {
   // Active agent tracking
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [completedAgents, setCompletedAgents] = useState<Set<string>>(new Set());
-  
-  // Group events by agent
+
+  // ... (unchanged eventsByAgent logic) ...
   const eventsByAgent = events.reduce((acc, event) => {
     const agent = event.agent.toLowerCase();
     if (!acc[agent]) acc[agent] = [];
@@ -92,16 +96,13 @@ export default function Home() {
     }
   };
   
-  // ... existing code ...
-
-
-  
   const loadExistingTask = async (id: string) => {
     try {
       const data = await getTaskStatus(id);
       setStatus(data.status);
       setEvents(data.events || []);
       setReportUrl(data.report_url);
+      setTaskQuery(data.query || null); // Load the original query
       
       if (data.status !== 'COMPLETED' && data.status !== 'FAILED') {
         setLoading(true);
@@ -113,6 +114,7 @@ export default function Home() {
     }
   };
   
+  // ... (subscribeToEvents) ...
   const subscribeToEvents = useCallback((id: string) => {
     const cleanup = pollTaskEvents(id, {
       onEvents: (newEvents, allEvents) => {
@@ -160,6 +162,22 @@ export default function Home() {
 
     setLoading(true);
     setError(null);
+
+    // If answering clarification
+    if (status === 'CLARIFICATION_REQUIRED' && taskId) {
+        try {
+            await answerClarification(taskId, query); 
+            setQuery(''); // Clear answer input
+            setLoading(true); // Show loading state
+            subscribeToEvents(taskId); // Restart polling since it stopped on CLARIFICATION_REQUIRED
+        } catch (err) {
+            setError("Failed to submit clarification.");
+            setLoading(false);
+        }
+        return;
+    }
+
+    // New Research
     setEvents([]);
     setReportUrl(null);
     setActiveAgent(null);
@@ -168,6 +186,7 @@ export default function Home() {
     try {
       const data = await submitResearch(query);
       setTaskId(data.task_id);
+      setTaskQuery(query); // Set explicit goal
       setStatus('QUEUED');
       
       // Save to local storage
@@ -209,6 +228,7 @@ export default function Home() {
     
     if (taskId === sessionId) {
       setTaskId(null);
+      setTaskQuery(null);
       setStatus('IDLE');
       setEvents([]);
       setReportUrl(null);
@@ -218,6 +238,7 @@ export default function Home() {
   
   const handleNewResearch = () => {
     setTaskId(null);
+    setTaskQuery(null);
     setStatus('IDLE');
     setEvents([]);
     setReportUrl(null);
@@ -252,61 +273,78 @@ export default function Home() {
 
           {/* Input form or Session Title */}
           <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm relative">
-            {taskId && status !== 'CLARIFICATION_REQUIRED' && status !== 'IDLE' ? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-semibold text-slate-200 mb-1">Current Research Session</h2>
-                  <p className="text-lg text-blue-400 font-medium">{query}</p>
-                </div>
-                {status !== 'COMPLETED' && status !== 'FAILED' && (
-                  <div className="flex items-center gap-2 text-slate-400 bg-slate-900 px-3 py-1.5 rounded-full text-sm border border-slate-800">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Running...
+            {taskId ? (
+              <div className="space-y-4">
+                  {/* Always show the Research Query if active */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-semibold text-slate-200 mb-1">Current Research Session</h2>
+                      <p className="text-lg text-blue-400 font-medium">{taskQuery || 'Loading...'}</p>
+                    </div>
+                    {status !== 'COMPLETED' && status !== 'FAILED' && status !== 'CLARIFICATION_REQUIRED' && (
+                      <div className="flex items-center gap-2 text-slate-400 bg-slate-900 px-3 py-1.5 rounded-full text-sm border border-slate-800">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Running...
+                      </div>
+                    )}
+                    {(status === 'COMPLETED' || status === 'FAILED') && (
+                      <button
+                        onClick={handleNewResearch}
+                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg transition-colors"
+                      >
+                        <Plus className="w-4 h-4" />
+                        New Research
+                      </button>
+                    )}
                   </div>
-                )}
-                {(status === 'COMPLETED' || status === 'FAILED') && (
-                  <button
-                    onClick={handleNewResearch}
-                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg transition-colors"
-                  >
-                    <Plus className="w-4 h-4" />
-                    New Research
-                  </button>
-                )}
+
+                  {/* Clarification Input if Needed */}
+                  {status === 'CLARIFICATION_REQUIRED' && (
+                    <div className="border-t border-slate-800 pt-4">
+                       <div className="mb-3 text-amber-400 flex flex-col gap-1 text-sm font-medium">
+                         <div className="flex items-center gap-2">
+                           <AlertCircle className="w-4 h-4" />
+                           Clarification Needed:
+                         </div>
+                         <p className="pl-6 text-amber-200/90">
+                           {events.find(e => e.action === 'clarification')?.message || "Please provide more details below."}
+                         </p>
+                       </div>
+                       <form onSubmit={handleSubmit} className="relative">
+                           <input
+                             type="text"
+                             value={query}
+                             onChange={(e) => setQuery(e.target.value)}
+                             placeholder="Enter your clarification here..."
+                             className="w-full bg-slate-950 border border-amber-500/50 rounded-xl py-4 px-6 pr-16 text-lg focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all"
+                             autoFocus
+                           />
+                           <button
+                             type="submit"
+                             disabled={loading}
+                             className="absolute right-2 bottom-2 top-2 h-10 w-10 flex items-center justify-center rounded-lg text-white bg-amber-600 hover:bg-amber-500 transition-colors"
+                           >
+                             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                           </button>
+                       </form>
+                    </div>
+                  )}
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="relative">
-                {status === 'CLARIFICATION_REQUIRED' && (
-                   <div className="mb-3 text-amber-400 flex flex-col gap-1 text-sm font-medium">
-                     <div className="flex items-center gap-2">
-                       <AlertCircle className="w-4 h-4" />
-                       Clarification Needed:
-                     </div>
-                     <p className="pl-6 text-amber-200/90">
-                       {events.find(e => e.action === 'clarification')?.message || "Please provide more details below."}
-                     </p>
-                   </div>
-                )}
                 <input
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={status === 'CLARIFICATION_REQUIRED' ? "Enter your clarification here..." : "e.g., Analyze the EV market in Brazil..."}
-                  className={`w-full bg-slate-950 border rounded-xl py-4 px-6 pr-16 text-lg focus:outline-none focus:ring-2 transition-all ${
-                    status === 'CLARIFICATION_REQUIRED' 
-                      ? 'border-amber-500/50 focus:ring-amber-500' 
-                      : 'border-slate-800 focus:ring-blue-500'
-                  }`}
-                  disabled={loading && status !== 'COMPLETED' && status !== 'FAILED'}
+                  placeholder="e.g., Analyze the EV market in Brazil..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl py-4 px-6 pr-16 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  disabled={loading}
                   autoFocus
                 />
                 <button
                   type="submit"
-                  disabled={loading && status !== 'COMPLETED' && status !== 'FAILED'}
-                  className={`absolute right-2 bottom-2 top-auto h-10 w-10 flex items-center justify-center rounded-lg text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                    status === 'CLARIFICATION_REQUIRED' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-blue-600 hover:bg-blue-500'
-                  } ${status === 'CLARIFICATION_REQUIRED' ? 'top-10' : 'top-2'}`}
-                  style={status === 'CLARIFICATION_REQUIRED' ? { top: 'auto', bottom: '8px' } : {}}
+                  disabled={loading}
+                  className="absolute right-2 bottom-2 top-2 h-10 w-10 flex items-center justify-center rounded-lg text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50"
                 >
                   {loading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -420,17 +458,34 @@ export default function Home() {
                     </div>
                     <h3 className="text-xl font-bold text-white">Report Ready!</h3>
                     <p className="text-slate-400 max-w-xs">
-                      Your comprehensive market research report has been generated successfully.
+                      Your market research report has been generated successfully.
                     </p>
-                    <a
-                      href={reportUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-lg font-medium transition-colors"
-                    >
-                      <FileText className="w-5 h-5" />
-                      Download Report
-                    </a>
+                    <div className="flex gap-4 items-center justify-center">
+                        <button
+                        onClick={async () => {
+                            if (!taskId) return;
+                            try {
+                                setDownloading(true);
+                                const data = await getReportUrl(taskId);
+                                window.open(data.url, '_blank');
+                            } catch (err) {
+                                console.error("Failed to get report URL:", err);
+                                alert("Failed to download report.");
+                            } finally {
+                                setDownloading(false);
+                            }
+                        }}
+                        disabled={downloading}
+                        className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                        >
+                        {downloading ? (
+                             <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                            <FileText className="w-5 h-5" />
+                        )}
+                        {downloading ? "Preparing Download..." : "Download Report"}
+                        </button>
+                    </div>
                   </motion.div>
                 ) : status === 'FAILED' ? (
                   <div className="text-red-400 space-y-2">
@@ -443,9 +498,6 @@ export default function Home() {
                       <AlertCircle className="w-6 h-6" />
                     </div>
                     <p className="font-medium">Clarification Needed</p>
-                    <p className="text-sm text-slate-400">
-                      {events.find(e => e.action === 'clarification')?.message || 'Please provide more details.'}
-                    </p>
                   </div>
                 ) : loading ? (
                   <div className="text-slate-400 space-y-3">

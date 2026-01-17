@@ -9,12 +9,15 @@ from botocore.exceptions import ClientError
 # Initialize clients outside handler for reuse
 endpoint_url = os.environ.get('AWS_ENDPOINT_URL') # For LocalStack
 dynamodb_endpoint_url = os.environ.get('DYNAMODB_ENDPOINT', endpoint_url) # Specific for DynamoDB Local
+s3_client = boto3.client('s3', endpoint_url=endpoint_url, region_name='us-east-1')
 
 sqs = boto3.client('sqs', endpoint_url=endpoint_url, region_name='us-east-1')
 dynamodb = boto3.client('dynamodb', endpoint_url=dynamodb_endpoint_url, region_name='us-east-1')
 
 SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL')
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE_TASKS')
+S3_BUCKET_REPORTS = os.environ.get('S3_BUCKET_REPORTS', 'market-research-reports')
+
 
 def submit_handler(event, context):
     print(f"Received submit event: {json.dumps(event)}")
@@ -274,4 +277,84 @@ def list_sessions_handler(event, context):
         return {
             'statusCode': 500,
             'body': json.dumps({'error': 'Internal Server Error'})
+        }
+
+def get_report_handler(event, context):
+    print(f"Received get_report event: {json.dumps(event)}")
+    
+    try:
+        task_id = event.get('pathParameters', {}).get('task_id')
+        if not task_id:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Missing task_id parameter'})
+            }
+        
+        try:
+            # Try to get PDF first
+            pdf_key = f"{task_id}/report.pdf"
+            md_key = f"{task_id}/report.md"
+            print(f"DEBUG: Checking bucket '{S3_BUCKET_REPORTS}' for keys: {pdf_key}, {md_key}")
+
+            target_key = None
+            filename_ext = ""
+
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET_REPORTS, Key=pdf_key)
+                print(f"DEBUG: Found PDF: {pdf_key}")
+                target_key = pdf_key
+                filename_ext = "pdf"
+            except ClientError as e:
+                print(f"DEBUG: PDF check failed: {e}")
+                # Fallback to MD
+                try:
+                    s3_client.head_object(Bucket=S3_BUCKET_REPORTS, Key=md_key)
+                    print(f"DEBUG: Found MD: {md_key}")
+                    target_key = md_key
+                    filename_ext = "md"
+                except ClientError as e2:
+                    print(f"DEBUG: MD check failed: {e2}")
+                    # Neither found
+                    pass
+            
+            if not target_key:
+                 print(f"DEBUG: Report not found for task {task_id}")
+                 return {
+                    'statusCode': 404,
+                    'body': json.dumps({'error': f'Report not found in bucket {S3_BUCKET_REPORTS}. Checked {pdf_key} and {md_key}'})
+                }
+
+            # Generate presigned URL
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': S3_BUCKET_REPORTS,
+                    'Key': target_key,
+                    'ResponseContentDisposition': f'inline; filename="report-{task_id}.{filename_ext}"',
+                    'ResponseContentType': 'application/pdf' if filename_ext == 'pdf' else 'text/markdown'
+                },
+                ExpiresIn=3600
+            )
+            
+            # Fix LocalStack URL for browser access
+            if 'localstack:4566' in url:
+                url = url.replace('localstack:4566', 'localhost:4566')
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json'
+                },
+                'body': json.dumps({'url': url})
+            }
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            print(f"ClientError: {error_code}, {e}")
+            raise e
+
+    except Exception as e:
+        print(f"Error fetching report: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': f'Internal Server Error: {str(e)}'})
         }

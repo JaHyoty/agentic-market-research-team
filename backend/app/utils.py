@@ -109,6 +109,7 @@ def generate_pdf(markdown_text):
 
 def upload_to_s3(file_obj, bucket, key):
     s3 = get_boto3_client("s3")
+    file_obj.seek(0)
     s3.upload_fileobj(file_obj, bucket, key)
     return f"s3://{bucket}/{key}"
 

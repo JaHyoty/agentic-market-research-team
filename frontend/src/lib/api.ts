@@ -46,8 +46,18 @@ export const submitResearch = async (query: string) => {
   return response.data;
 };
 
+export const answerClarification = async (taskId: string, answer: string) => {
+  const response = await api.post('/research', { task_id: taskId, answer });
+  return response.data;
+};
+
 export const getTaskStatus = async (taskId: string): Promise<TaskStatus> => {
   const response = await api.get(`/tasks/${taskId}`);
+  return response.data;
+};
+
+export const getReportUrl = async (taskId: string): Promise<{ url: string }> => {
+  const response = await api.get(`/reports/${taskId}`);
   return response.data;
 };
 

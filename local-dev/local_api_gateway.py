@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
@@ -27,7 +27,7 @@ if not os.environ.get('DYNAMODB_TABLE_TASKS'):
     os.environ['DYNAMODB_TABLE_TASKS'] = 'market-research-tasks'
 
 # Import the actual Lambda handlers
-from backend.lambdas.handler import submit_handler, get_status_handler, list_sessions_handler
+from backend.lambdas.handler import submit_handler, get_status_handler, list_sessions_handler, get_report_handler
 
 app = FastAPI(title="Local API Gateway Emulator")
 
@@ -94,6 +94,31 @@ async def proxy_list_sessions(request: Request):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.get("/reports/{task_id}")
+async def get_report(task_id: str):
+    """Download the report for a task."""
+    event = {
+        "pathParameters": {
+            "task_id": task_id
+        }
+    }
+    context = {}
+    
+    response = get_report_handler(event, context)
+    
+    if response['statusCode'] >= 400:
+        error_detail = response.get('body', 'Unknown error')
+        try:
+            error_detail = json.loads(error_detail)
+        except:
+            pass
+        raise HTTPException(status_code=response['statusCode'], detail=error_detail)
+        
+    return Response(
+        content=response['body'],
+        headers=response.get('headers', {})
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)

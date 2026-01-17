@@ -16,3 +16,4 @@ reportlab
 kubernetes
 pytest
 requests
+xhtml2pdf

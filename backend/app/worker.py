@@ -10,6 +10,8 @@ from backend.app.graph.graph import create_graph
 from langchain_core.messages import HumanMessage
 
 import threading
+import markdown
+from xhtml2pdf import pisa
 
 def process_message(message, sqs_client, queue_url):
     heartbeat_stop_event = threading.Event()
@@ -202,17 +204,30 @@ def process_message(message, sqs_client, queue_url):
         report = final_state.get('draft_report', 'No report generated.')
         print(f"--- Report extracted. Length: {len(report)} characters ---", file=sys.stderr)
         
-        # Generate Report Buffer (Markdown)
-        print(f"--- Preparing Markdown report for task {task_id} ---", file=sys.stderr)
-        # Convert string to bytes for S3 upload
-        report_buffer = io.BytesIO(report.encode('utf-8'))
-        print(f"--- Report buffer ready. Size: {report_buffer.getbuffer().nbytes} bytes ---", file=sys.stderr)
+        # Generate Report Buffer (PDF)
+        print(f"--- Preparing PDF report for task {task_id} ---", file=sys.stderr)
         
-        # Upload to S3
-        print(f"--- Uploading Report to S3 for task {task_id}. Bucket: {settings.S3_BUCKET_REPORTS} ---", file=sys.stderr)
-        key = f"{task_id}/report.md"
-        s3_url = upload_to_s3(report_buffer, settings.S3_BUCKET_REPORTS, key)
-        print(f"--- Report uploaded to S3. URL: {s3_url} ---", file=sys.stderr)
+        # Convert Markdown to HTML
+        html_content = markdown.markdown(report, extensions=['tables'])
+        
+        # Create PDF
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(html_content, dest=pdf_buffer)
+        
+        if pisa_status.err:
+             print(f"--- PDF generation error: {pisa_status.err} ---", file=sys.stderr)
+             # Fallback to text/markdown if PDF fails
+             report_buffer = io.BytesIO(report.encode('utf-8'))
+             key = f"{task_id}/report.md"
+             s3_url = upload_to_s3(report_buffer, settings.S3_BUCKET_REPORTS, key)
+        else:
+            print(f"--- PDF generated. Size: {pdf_buffer.getbuffer().nbytes} bytes ---", file=sys.stderr)
+            
+            # Upload to S3
+            print(f"--- Uploading Report to S3 for task {task_id}. Bucket: {settings.S3_BUCKET_REPORTS} ---", file=sys.stderr)
+            key = f"{task_id}/report.pdf"
+            s3_url = upload_to_s3(pdf_buffer, settings.S3_BUCKET_REPORTS, key)
+            print(f"--- Report uploaded to S3. URL: {s3_url} ---", file=sys.stderr)
         
         # Save Full Log to Markdown
         print(f"--- Saving Full Log for task {task_id} ---", file=sys.stderr)
@@ -240,7 +255,7 @@ def process_message(message, sqs_client, queue_url):
         completion_event = create_agent_event(
             agent="system",
             action="complete",
-            message="Research report generated successfully",
+            message="Research report generated successfully (PDF)",
             details={"report_url": s3_url}
         )
         update_task_status(task_id, "COMPLETED", events=[completion_event], report_url=s3_url)

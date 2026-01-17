@@ -394,7 +394,7 @@ export default function Home() {
               <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 h-[200px] overflow-y-scroll space-y-2 custom-scrollbar">
                 <AnimatePresence initial={false}>
                   {events.length === 0 ? (
-                    <p className="text-slate-500 text-center italic py-8">Waiting for the next free research team...</p>
+                    <p className="text-slate-500 text-center italic py-8">Agent actions will appear here once processing begins.</p>
                   ) : (
                     events
                       .filter(e => 
@@ -491,6 +491,11 @@ export default function Home() {
                   <div className="text-red-400 space-y-2">
                     <AlertCircle className="w-10 h-10 mx-auto" />
                     <p>Research failed. Please try again.</p>
+                  </div>
+                ) : status === 'QUEUED' ? (
+                  <div className="text-red-400 space-y-2">
+                    <AlertCircle className="w-10 h-10 mx-auto" />
+                    <p>Research is queued. Waiting for the next available resource.</p>
                   </div>
                 ) : status === 'CLARIFICATION_REQUIRED' ? (
                   <div className="text-orange-400 space-y-2 max-w-xs">

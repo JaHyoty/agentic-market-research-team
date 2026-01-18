@@ -15,3 +15,4 @@ class ResearchState(TypedDict):
     messages: Annotated[List[AnyMessage], operator.add]
     revision_count: int
     next_step: str
+

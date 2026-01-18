@@ -113,7 +113,7 @@ def upload_to_s3(file_obj, bucket, key):
     s3.upload_fileobj(file_obj, bucket, key)
     return f"s3://{bucket}/{key}"
 
-def update_task_status(task_id, status, report_url=None, state=None, events=None):
+def update_task_status(task_id, status, report_url=None, state=None, events=None, current_agent=None):
     """Update task status in DynamoDB.
     
     Args:
@@ -122,6 +122,7 @@ def update_task_status(task_id, status, report_url=None, state=None, events=None
         report_url: S3 URL of the final report
         state: Serialized graph state for resumption
         events: List of structured event dicts from create_agent_event()
+        current_agent: Currently active agent name for real-time UI updates
     """
     dynamodb = get_boto3_client("dynamodb")
     
@@ -145,6 +146,11 @@ def update_task_status(task_id, status, report_url=None, state=None, events=None
         update_expression += ", #st = :st"
         expression_attribute_names["#st"] = "state"
         expression_attribute_values[":st"] = {"S": state}
+    
+    if current_agent:
+        update_expression += ", #ca = :ca"
+        expression_attribute_names["#ca"] = "current_agent"
+        expression_attribute_values[":ca"] = {"S": current_agent}
         
     dynamodb.update_item(
         TableName=settings.DYNAMODB_TABLE_TASKS,

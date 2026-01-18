@@ -43,6 +43,7 @@ export interface TaskStatus {
   report_url: string | null;
   query: string | null;
   created_at: string | null;
+  current_agent: string | null;
 }
 
 export interface SessionSummary {
@@ -89,6 +90,7 @@ export function pollTaskEvents(
   callbacks: {
     onEvents?: (events: AgentEvent[], allEvents: AgentEvent[]) => void;
     onStatus?: (status: string) => void;
+    onCurrentAgent?: (agent: string | null) => void;
     onComplete?: (data: { status: string; report_url: string | null }) => void;
     onError?: (error: string) => void;
   },
@@ -105,6 +107,9 @@ export function pollTaskEvents(
       
       // Notify status update
       callbacks.onStatus?.(data.status);
+      
+      // Notify current agent (real-time tracking)
+      callbacks.onCurrentAgent?.(data.current_agent);
       
       // Check for new events
       const allEvents = data.events || [];

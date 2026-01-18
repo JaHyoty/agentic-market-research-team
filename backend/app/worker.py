@@ -13,6 +13,125 @@ import threading
 import markdown
 from xhtml2pdf import pisa
 
+def process_graph_step(task_id, step_state, tracking_state):
+    """Process a single step from the graph stream and update task status."""
+    messages = step_state.get('messages', [])
+    if not messages:
+        return
+
+    last_message = messages[-1]
+    msg_type = type(last_message).__name__
+    agent_name = getattr(last_message, 'name', None) or "system"
+    content_text = parse_response_content(last_message.content)
+    content_preview = content_text[:100] + "..." if len(content_text) > 100 else content_text
+
+    print(f"--- State Updated. {msg_type} ({agent_name}): {content_preview[:70]}", file=sys.stderr)
+
+    # 1. Determine Current Agent from Next Step
+    next_step = step_state.get('next_step')
+    state_current_agent = None
+    
+    known_agents = ["supervisor", "researcher", "quant", "scout", "writer", "reviewer"]
+
+    if next_step and next_step in known_agents:
+        state_current_agent = next_step
+    elif next_step == "FINISH":
+         # If finish, we might want to show reviewer or supervisor, but let's stick to last active
+         pass
+    
+    # logic for initial state or Supervisor transition (where next_step might be None)
+    
+    # 2. Update Fallback Tracking
+    if agent_name in known_agents:
+        tracking_state['previous_agent'] = agent_name
+
+    # 3. Determine Effective Agent for UI
+    # Priority: state_current_agent (next_step) > previous_agent (inferred from message)
+    # If starting, we might default to Supervisor if nothing else
+    effective_agent = state_current_agent or tracking_state['previous_agent'] or "supervisor"
+
+    # 4. Create and Emit Event based on Message Type
+    event = None
+    
+    if msg_type == "ToolMessage":
+        # Tool result
+        tool_name = agent_name 
+        event = create_agent_event(
+            agent=tool_name,
+            action="tool_result",
+            message=f"Tool '{tool_name}' returned result",
+            details={"preview": content_preview}
+        )
+        # Use effective_agent to keep the real agent active in UI
+        update_task_status(task_id, "PROCESSING", events=[event], current_agent=effective_agent)
+        return
+
+    elif msg_type == "AIMessage" and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+        # Agent calling tools
+        for tool_call in last_message.tool_calls:
+            tool_name = tool_call.get('name', 'unknown')
+            
+            # Skip noise (e.g. scrape_website)
+            if tool_name == 'scrape_website':
+                continue
+            
+            tool_args = tool_call.get('args', {})
+            
+            # Format message based on tool type
+            if tool_name == "get_financial_metrics":
+                ticker = tool_args.get('ticker', 'unknown')
+                tool_msg = f"Fetching financials for {ticker}"
+            elif tool_name == "get_stock_price":
+                ticker = tool_args.get('ticker', 'unknown')
+                tool_msg = f"Fetching stock price for {ticker}"
+            else:
+                tool_msg = json.dumps(tool_args) if tool_args else f"Calling tool '{tool_name}'"
+            
+            tool_event = create_agent_event(
+                agent=agent_name,
+                action="tool_call",
+                message=tool_msg,
+                details={"tool": tool_name}
+            )
+            # Use effective_agent or the current agent_name
+            update_task_status(task_id, "PROCESSING", events=[tool_event], current_agent=effective_agent or agent_name)
+        return
+
+    elif msg_type == "AIMessage":
+        # Agent result/output
+        event = create_agent_event(
+            agent=agent_name,
+            action="result",
+            message=content_preview
+        )
+    else:
+        # Human/System message
+        event = create_agent_event(
+            agent="user",
+            action="input",
+            message=content_preview
+        )
+
+    # 5. Emit the main event
+    # Use agent_name if known, else usage effective_agent
+    current = agent_name if agent_name in known_agents else effective_agent
+    update_task_status(task_id, "PROCESSING", events=[event], current_agent=current)
+
+    # 6. Emit "Thinking" Event (Agent Change) - AFTER processing the message
+    # Emit "thinking" event if the active agent tracked in state has changed
+    if (state_current_agent and 
+        state_current_agent != tracking_state['previous_state_agent'] and 
+        state_current_agent in known_agents):
+        
+        thinking_event = create_agent_event(
+            agent=state_current_agent,
+            action="thinking",
+            message=f"{state_current_agent.capitalize()} is analyzing..."
+        )
+        update_task_status(task_id, "PROCESSING", events=[thinking_event], current_agent=state_current_agent)
+        tracking_state['previous_state_agent'] = state_current_agent
+
+
 def process_message(message, sqs_client, queue_url):
     heartbeat_stop_event = threading.Event()
     heartbeat_thread = None
@@ -93,7 +212,7 @@ def process_message(message, sqs_client, queue_url):
                     print(f"Heartbeat failed: {e}", file=sys.stderr)
                     # If heartbeat fails (e.g. message deleted), stopping might be good, but for now just retry/log
                     time.sleep(30)
-
+        
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
 
@@ -106,71 +225,25 @@ def process_message(message, sqs_client, queue_url):
                 "task": query,
                 "messages": [HumanMessage(content=query)],
                 "revision_count": 0,
-                "date": datetime.now().strftime("%Y-%m-%d")
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "current_agent": "supervisor"
             }
         
         # Run graph with streaming for visibility
         final_state = initial_state
-        last_event_count = 0  # Track events to avoid duplicate updates
         print("Starting graph execution...", file=sys.stderr)
+        
+        # State tracking for UI updates
+        tracking_state = {
+            "previous_state_agent": None,
+            "previous_agent": None
+        }
         
         for step_state in app.stream(initial_state, stream_mode="values", config={"recursion_limit": 100}):
             final_state = step_state
             
-            # Get the last message for event creation
-            messages = final_state.get('messages', [])
-            if not messages:
-                continue
-                
-            last_message = messages[-1]
-            msg_type = type(last_message).__name__
-            agent_name = getattr(last_message, 'name', None) or "system"
-            content_text = parse_response_content(last_message.content)
-            content_preview = content_text[:100] + "..." if len(content_text) > 100 else content_text
-            
-            print(f"--- State Updated. {msg_type} ({agent_name}): {content_preview[:70]}", file=sys.stderr)
-            
-            # Determine action type based on message type
-            if msg_type == "ToolMessage":
-                # Tool result
-                tool_name = agent_name  # ToolMessage.name is the tool name
-                event = create_agent_event(
-                    agent=tool_name,
-                    action="tool_result",
-                    message=f"Tool '{tool_name}' returned result",
-                    details={"preview": content_preview}
-                )
-            elif msg_type == "AIMessage" and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-                # Agent making a tool call
-                for tool_call in last_message.tool_calls:
-                    tool_name = tool_call.get('name', 'unknown')
-                    tool_args = tool_call.get('args', {})
-                    tool_msg = json.dumps(tool_args) if tool_args else f"Calling tool '{tool_name}'"
-                    event = create_agent_event(
-                        agent=agent_name,
-                        action="tool_call",
-                        message=tool_msg,
-                        details={"tool": tool_name}
-                    )
-                    update_task_status(task_id, "PROCESSING", events=[event])
-                continue  # Skip the regular event update for tool calls
-            elif msg_type == "AIMessage":
-                # Agent produced a result/thinking
-                event = create_agent_event(
-                    agent=agent_name,
-                    action="result",
-                    message=content_preview
-                )
-            else:
-                # Human message or other
-                event = create_agent_event(
-                    agent="user",
-                    action="input",
-                    message=content_preview
-                )
-            
-            # Emit structured event to DynamoDB
-            update_task_status(task_id, "PROCESSING", events=[event])
+            # Process step and emit events
+            process_graph_step(task_id, step_state, tracking_state)
                 
             # Check for clarification request
             if final_state.get('next_step') == 'ask_question':

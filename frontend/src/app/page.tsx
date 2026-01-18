@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   submitResearch, 
   answerClarification,
@@ -46,6 +46,16 @@ export default function Home() {
   // Active agent tracking
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [completedAgents, setCompletedAgents] = useState<Set<string>>(new Set());
+  
+  // Ref for auto-scrolling live feed
+  const liveFeedRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll live feed when new events arrive
+  useEffect(() => {
+    if (liveFeedRef.current) {
+      liveFeedRef.current.scrollTop = liveFeedRef.current.scrollHeight;
+    }
+  }, [events]);
 
   // ... (unchanged eventsByAgent logic) ...
   const eventsByAgent = events.reduce((acc, event) => {
@@ -120,20 +130,19 @@ export default function Home() {
       onEvents: (newEvents, allEvents) => {
         setEvents(allEvents);
         
-        // Track active agent from new events
+        // Mark agents as completed when they produce a result
         for (const event of newEvents) {
-          if (KNOWN_AGENTS.includes(event.agent.toLowerCase())) {
-            setActiveAgent(event.agent.toLowerCase());
-            
-            // Mark as completed if it's a result action
-            if (event.action === 'result') {
-              setCompletedAgents(prev => new Set([...prev, event.agent.toLowerCase()]));
-            }
+          if (KNOWN_AGENTS.includes(event.agent.toLowerCase()) && event.action === 'result') {
+            setCompletedAgents(prev => new Set([...prev, event.agent.toLowerCase()]));
           }
         }
       },
       onStatus: (newStatus) => {
         setStatus(newStatus);
+      },
+      onCurrentAgent: (agent) => {
+        // Real-time agent tracking from API
+        setActiveAgent(agent);
       },
       onComplete: (data) => {
         setStatus(data.status);
@@ -391,7 +400,10 @@ export default function Home() {
               </div>
               
               {/* Live event stream */}
-              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 h-[200px] overflow-y-scroll space-y-2 custom-scrollbar">
+              <div 
+                ref={liveFeedRef}
+                className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 h-[200px] overflow-y-scroll space-y-2 custom-scrollbar"
+              >
                 <AnimatePresence initial={false}>
                   {events.length === 0 ? (
                     <p className="text-slate-500 text-center italic py-8">Agent actions will appear here once processing begins.</p>

@@ -1,7 +1,7 @@
 from backend.app.openrouter import ChatOpenRouter
 from langchain_core.messages import HumanMessage, SystemMessage
 from backend.app.models.state import ResearchState
-from backend.app.agents.prompts import *
+from backend.app.agents.prompts import SUPERVISOR_PROMPT, QUANT_PROMPT, RESEARCHER_PROMPT, SCOUT_PROMPT, WRITER_PROMPT, REVIEWER_PROMPT, get_prompt
 from backend.app.tools.search import search_web
 from backend.app.tools.finance import get_stock_price, get_financial_metrics
 from backend.app.tools.web import scrape_website
@@ -38,7 +38,7 @@ def supervisor_node(state: ResearchState):
     
     # Invoke LLM with context
     messages = [
-        SystemMessage(content=SUPERVISOR_PROMPT),
+        SystemMessage(content=get_prompt(SUPERVISOR_PROMPT)),
         HumanMessage(content=context)
     ]
     response = llm.invoke(messages)
@@ -134,7 +134,7 @@ def quant_node(state: ResearchState):
         context += f"Instructions from {sender}: {last_message.content}\n"
     
     messages = [
-        SystemMessage(content=QUANT_PROMPT),
+        SystemMessage(content=get_prompt(QUANT_PROMPT)),
         HumanMessage(content=context)
     ]
 
@@ -180,7 +180,7 @@ def researcher_node(state: ResearchState):
     recent_history = state_messages[start_index:] if state_messages else []
 
     messages = [
-        SystemMessage(content=RESEARCHER_PROMPT + "\n\n" + context),
+        SystemMessage(content=get_prompt(RESEARCHER_PROMPT) + "\n\n" + context),
     ] + recent_history
     
     agent = llm.bind_tools([search_web, scrape_website])
@@ -219,7 +219,7 @@ def scout_node(state: ResearchState):
     recent_history = state_messages[start_index:] if state_messages else []
 
     messages = [
-        SystemMessage(content=SCOUT_PROMPT + "\n\n" + context),
+        SystemMessage(content=get_prompt(SCOUT_PROMPT) + "\n\n" + context),
     ] + recent_history
     
     agent = llm.bind_tools([search_web, scrape_website])
@@ -253,7 +253,7 @@ def writer_node(state: ResearchState):
         context += f"{sender} Instructions from supervisor: {last_message.content}\n"
     
     messages = [
-        SystemMessage(content=WRITER_PROMPT),
+        SystemMessage(content=get_prompt(WRITER_PROMPT)),
         HumanMessage(content=context)
     ]
     
@@ -265,7 +265,7 @@ def writer_node(state: ResearchState):
 
 def reviewer_node(state: ResearchState):
     messages = [
-        SystemMessage(content=REVIEWER_PROMPT), 
+        SystemMessage(content=get_prompt(REVIEWER_PROMPT)), 
         HumanMessage(content=f"Original Task & Clarifications:\n{state.get('task')}\n\nDraft Report to Review:\n{state.get('draft_report', 'No report drafted.')}")
     ]
     

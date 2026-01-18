@@ -202,6 +202,9 @@ def get_status_handler(event, context):
                     events.append(json.loads(event_str))
                 except json.JSONDecodeError:
                     pass  # Skip malformed events
+        
+        # Get current active agent
+        current_agent = item.get('current_agent', {}).get('S')
 
         return {
             'statusCode': 200,
@@ -214,7 +217,8 @@ def get_status_handler(event, context):
                 'events': events,
                 'report_url': report_url,
                 'query': query,
-                'created_at': created_at
+                'created_at': created_at,
+                'current_agent': current_agent
             })
         }
 

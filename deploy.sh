@@ -12,142 +12,97 @@ fi
 echo "Deploying to $ENVIRONMENT..."
 
 if [ "$ENVIRONMENT" == "local" ]; then
-    # Ensure snap bin is in path for local kubectl
-    export PATH=$PATH:/snap/bin
+    echo "Building and starting local Docker Compose environment..."
+    cd local-dev
+    docker compose up -d --build
+    cd ..
     
-    # Point to the local kubeconfig
-    export KUBECONFIG=local-dev/kubeconfig/kubeconfig.yaml
-    
-    REGISTRY="localhost:5000"
-    IMAGE_NAME="market-research-backend"
-    TAG="local"
-    FULL_IMAGE="$REGISTRY/$IMAGE_NAME:$TAG"
-    
-    echo "Building image for local environment..."
-    docker build -f local-dev/Dockerfile.api -t "$FULL_IMAGE" .
-    
-    echo "Pushing image to local registry..."
-    docker push "$FULL_IMAGE"
-    
-    
-    echo "Configuring LocalStack DNS workaround..."
-    LOCALSTACK_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' local-dev-localstack-1 || true)
-    if [ -n "$LOCALSTACK_IP" ]; then
-        echo "Found LocalStack IP: $LOCALSTACK_IP"
-        # Create Service and Endpoints for localstack resolution
-        cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: localstack
-  namespace: default
-spec:
-  ports:
-  - port: 4566
-    targetPort: 4566
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: localstack
-  namespace: default
-subsets:
-- addresses:
-  - ip: $LOCALSTACK_IP
-  ports:
-  - port: 4566
-EOF
-    else
-        echo "Warning: Could not find LocalStack container IP. DNS resolution for 'localstack' might fail."
-    fi
-
-    # Load secrets from .env if present
-    if [ -f local-dev/.env ]; then
-        echo "Loading secrets from local-dev/.env..."
-        export $(grep -v '^#' local-dev/.env | xargs)
-    else
-        echo "Warning: local-dev/.env not found using default mock keys except for OpenRouter which might fail."
-    fi
-
-    echo "Seeding Secrets in LocalStack..."
-    docker exec local-dev-localstack-1 awslocal secretsmanager delete-secret --secret-id market-research-keys --force-delete-without-recovery || true
-    docker exec local-dev-localstack-1 awslocal secretsmanager create-secret \
-        --name market-research-keys \
-        --secret-string "{\"OPENAI_API_KEY\":\"${OPENAI_API_KEY:-mock-openai-key}\",\"TAVILY_API_KEY\":\"${TAVILY_API_KEY:-mock-tavily-key}\",\"OPENROUTER_API_KEY\":\"${OPENROUTER_API_KEY:-mock-openrouter-key}\"}" \
-        --region us-east-1 || true
-
-    echo "Configuring DynamoDB DNS workaround..."
-    DYNAMODB_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' local-dev-dynamodb-local-1 || true)
-    if [ -n "$DYNAMODB_IP" ]; then
-        echo "Found DynamoDB IP: $DYNAMODB_IP"
-        # Create Service and Endpoints for dynamodb resolution
-        cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: dynamodb-local
-  namespace: default
-spec:
-  ports:
-  - port: 8000
-    targetPort: 8000
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: dynamodb-local
-  namespace: default
-subsets:
-- addresses:
-  - ip: $DYNAMODB_IP
-  ports:
-  - port: 8000
-EOF
-    else
-        echo "Warning: Could not find DynamoDB container IP. DNS resolution for 'dynamodb-local' might fail."
-    fi
-
-    echo "Applying manifests..."
-    kubectl apply -k k8s/overlays/local
-    
-    echo "Restarting worker deployment to pick up new image..."
-    kubectl rollout restart deployment/market-research-worker
-    echo "Waiting for worker to roll out..."
-    kubectl rollout status deployment/market-research-worker
+    echo ""
+    echo "Local deployment complete!"
+    echo ""
+    echo "Services running:"
+    echo "  - LocalStack (S3, SQS, Secrets): http://localhost:4566"
+    echo "  - DynamoDB Local: http://localhost:8000"
+    echo "  - API Gateway: http://localhost:8080"
+    echo "  - Worker: Running in Docker"
+    echo ""
+    echo "To view worker logs:"
+    echo "  docker compose -f local-dev/docker-compose.yml logs -f worker"
+    echo ""
+    echo "To start the frontend:"
+    echo "  cd frontend && npm run dev"
 
 elif [ "$ENVIRONMENT" == "cloud" ]; then
-    if [ -z "$ECR_REGISTRY" ]; then
-        echo "Error: ECR_REGISTRY environment variable is not set."
-        echo "Example: export ECR_REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com"
-        exit 1
+    # Validate required environment variables
+    if [ -z "$AWS_ACCOUNT_ID" ]; then
+        export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        echo "Using AWS Account ID: $AWS_ACCOUNT_ID"
     fi
-    
-    # Ensure AWS login
-    aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-    
+
+    ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com"
     IMAGE_NAME="market-research-backend"
-    TAG="latest" # You can change this to $(git rev-parse --short HEAD) for versioning
+    TAG="latest"
     FULL_IMAGE="$ECR_REGISTRY/$IMAGE_NAME:$TAG"
-    
-    echo "Building image for cloud environment..."
+
+    # Login to ECR
+    echo "Logging in to ECR..."
+    aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+    # Build and push backend image
+    echo "Building backend image..."
     docker build --platform linux/amd64 -f local-dev/Dockerfile.api -t "$FULL_IMAGE" .
-    
+
     echo "Pushing image to ECR..."
     docker push "$FULL_IMAGE"
+
+    # Update ECS service to deploy new image
+    echo "Updating ECS service..."
+    aws ecs update-service \
+        --cluster market-research \
+        --service worker \
+        --force-new-deployment \
+        --region us-east-1
+
+    echo ""
+    echo "Backend deployment complete!"
+    echo ""
     
-    # Update kustomization.yaml or use kustomize edit to set the image
-    echo "Updating kustomize image..."
-    cd k8s/overlays/prod
-    kustomize edit set image market-research-backend:latest="$FULL_IMAGE"
-    cd -
+    # Frontend deployment
+    echo "Building frontend..."
+    cd frontend
+    npm run build
     
-    echo "Applying manifests..."
-    kubectl apply -k k8s/overlays/prod
+    # Get the frontend bucket from Terraform output
+    cd ../infrastructure
+    FRONTEND_BUCKET=$(terraform output -raw frontend_bucket 2>/dev/null || echo "")
+    CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+    cd ..
     
+    if [ -n "$FRONTEND_BUCKET" ]; then
+        echo "Deploying frontend to S3: $FRONTEND_BUCKET"
+        aws s3 sync frontend/out/ "s3://$FRONTEND_BUCKET/" --delete
+        
+        if [ -n "$CLOUDFRONT_DIST_ID" ]; then
+            echo "Invalidating CloudFront cache..."
+            aws cloudfront create-invalidation \
+                --distribution-id "$CLOUDFRONT_DIST_ID" \
+                --paths "/*"
+        fi
+        
+        CLOUDFRONT_URL=$(cd infrastructure && terraform output -raw cloudfront_url 2>/dev/null || echo "")
+        echo ""
+        echo "Frontend deployment complete!"
+        echo "Application URL: $CLOUDFRONT_URL"
+    else
+        echo "Warning: Could not find frontend_bucket in Terraform outputs."
+        echo "Run 'terraform apply' in infrastructure/ first, then re-run this script."
+    fi
+
 else
     echo "Invalid environment: $ENVIRONMENT"
     echo "Usage: ./deploy.sh [local|cloud]"
     exit 1
 fi
 
+echo ""
 echo "Deployment complete!"

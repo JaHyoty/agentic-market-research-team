@@ -16,6 +16,17 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Handle rate limit errors
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 429) {
+      alert('Rate limit reached. Please wait a moment before trying again.');
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Types for structured events
 export interface AgentEvent {
   agent: string;

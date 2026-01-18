@@ -1,7 +1,7 @@
 services:
   init-perms:
     image: alpine
-    command: sh -c "mkdir -p /data/dynamodb_data /data/localstack_data /data/kubeconfig && chmod -R 777 /data/dynamodb_data /data/localstack_data /data/kubeconfig"
+    command: sh -c "mkdir -p /data/localstack_data && chmod -R 777 /data/localstack_data"
     volumes:
       - .:/data
 
@@ -20,24 +20,13 @@ services:
     volumes:
       - "./localstack_data:/var/lib/localstack"
       - "./init-scripts:/etc/localstack/init/ready.d"
+      - "./.env:/etc/localstack/init/.env"
       - "/var/run/docker.sock:/var/run/docker.sock"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 5s
       timeout: 5s
       retries: 5
-
-  dynamodb-local:
-    depends_on:
-      init-perms:
-        condition: service_completed_successfully
-    image: amazon/dynamodb-local
-    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
-    ports:
-      - "8000:8000"
-    volumes:
-      - "./dynamodb_data:/home/dynamodblocal/data"
-    working_dir: /home/dynamodblocal
 
   registry:
     image: registry:2
@@ -52,17 +41,17 @@ services:
       - "8080:8080"
     environment:
       - AWS_ENDPOINT_URL=http://localstack:4566
+      - LOCALSTACK_ENDPOINT=http://localstack:4566
+      - DYNAMODB_ENDPOINT=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_REGION=us-east-1
-      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - SQS_QUEUE_URL=http://localstack:4566/000000000000/market-research-tasks
       - DYNAMODB_TABLE_TASKS=market-research-tasks
+      - ENV=local
     depends_on:
       localstack:
         condition: service_healthy
-      dynamodb-local:
-        condition: service_started
     volumes:
       - ../backend:/app/backend
       - ../local-dev:/app/local-dev
@@ -72,20 +61,28 @@ services:
       timeout: 5s
       retries: 5
 
-  create-tables:
+  # Worker service (simulates ECS Fargate)
+  worker:
     build:
       context: ..
       dockerfile: local-dev/Dockerfile.api
-    command: python local-dev/create_table.py
+    command: python -m backend.app.worker
     environment:
       - AWS_ENDPOINT_URL=http://localstack:4566
-      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - LOCALSTACK_ENDPOINT=http://localstack:4566
+      - DYNAMODB_ENDPOINT=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_REGION=us-east-1
+      - SQS_QUEUE_URL=http://localstack:4566/000000000000/market-research-tasks
       - DYNAMODB_TABLE_TASKS=market-research-tasks
+      - S3_BUCKET_REPORTS=market-research-reports
+      - ENV=local
     depends_on:
-      dynamodb-local:
-        condition: service_started
+      localstack:
+        condition: service_healthy
     volumes:
-      - ../local-dev:/app/local-dev
+      - ../backend:/app/backend
+    deploy:
+      replicas: 1  # Set to 0 for true scale-to-zero, 1 for always-on dev
+    restart: unless-stopped

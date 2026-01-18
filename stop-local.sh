@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -8,11 +9,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}Stopping Local Environment...${NC}"
 
 cd local-dev
-
-# Stop Kind Cluster
-echo -e "${BLUE}Deleting Kind Cluster...${NC}"
-kind delete cluster --name agentic-cluster || true
-
 docker compose down
+cd ..
 
 echo -e "${GREEN}Local Environment stopped.${NC}"

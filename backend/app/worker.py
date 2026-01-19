@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage
 
 import threading
 import markdown
+import concurrent.futures
 from xhtml2pdf import pisa
 
 def process_graph_step(task_id, step_state, tracking_state):
@@ -353,15 +354,52 @@ def process_message(message, sqs_client, queue_url):
             heartbeat_stop_event.set()
             heartbeat_thread.join(timeout=2)
 
+def process_with_semaphore(message, sqs, queue_url, semaphore):
+    try:
+        process_message(message, sqs, queue_url)
+    finally:
+        semaphore.release()
+        
+        # Delete message after processing (moved from main loop to ensure it happens after processing)
+        # Note: process_message handles visibility extension.
+        # Ideally, deletion happens here if successful, but the original code deleted it 
+        # immediately after *calling* process_message (synchronously).
+        # Since we are now async, we must delete it here or inside process_message.
+        # The original code had:
+        # process_message(...)
+        # sqs.delete_message(...)
+        # So it deleted it after processing returned.
+        
+        try:
+            sqs.delete_message(
+                QueueUrl=queue_url,
+                ReceiptHandle=message['ReceiptHandle']
+            )
+        except Exception as e:
+            print(f"Error deleting message: {e}", file=sys.stderr)
+
+
 def run_worker():
     sqs = get_boto3_client("sqs")
     queue_url = settings.SQS_QUEUE_URL
     
     print(f"Worker listening on {queue_url}...")
+    
+    # Thread pool for parallel task execution
+    max_workers = 10
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    
+    # Semaphore to control polling based on active tasks
+    # We acquire before polling/submitting, and release when a task finishes.
+    semaphore = threading.Semaphore(max_workers)
+    
     error_count = 0
     
     while True:
         try:
+            # Block if we have max_workers active tasks
+            semaphore.acquire()
+            
             response = sqs.receive_message(
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=1,
@@ -369,18 +407,27 @@ def run_worker():
             )
             
             messages = response.get('Messages', [])
-            for message in messages:
-                # Pass client and queue_url for heartbeat
-                process_message(message, sqs, queue_url)
-                
-                # Delete message
-                sqs.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=message['ReceiptHandle']
-                )
+            
+            if messages:
+                for message in messages:
+                    # Submit task to executor
+                    # process_with_semaphore will release the semaphore when done
+                    executor.submit(process_with_semaphore, message, sqs, queue_url, semaphore)
+            else:
+                 # No message, release semaphore immediately
+                 semaphore.release()
                 
         except Exception as e:
             print(f"Error in worker loop: {e}")
+            # Ensure we don't leak semaphore permits on error (though acquire is before try, likely)
+            # If we acquired but didn't submit, we must release.
+            # But the logic above: acquire -> receive -> if messages submit (release in future) -> else release.
+            # If receive raises, we must release.
+            try:
+                semaphore.release()
+            except ValueError:
+                pass # Might be already released if we are careful, but here just safe-guard
+                
             error_count += 1
             if error_count >= 5:
                 print("Worker loop error count exceeded. Exiting.")

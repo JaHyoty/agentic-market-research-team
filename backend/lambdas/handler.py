@@ -73,6 +73,30 @@ def submit_handler(event, context):
                 })
             )
             
+            # 3. Trigger Scale-Out if needed (Cold Start Optimization)
+            if os.environ.get('ENV') != 'local':
+                ecs_cluster = os.environ.get('ECS_CLUSTER_NAME')
+                ecs_service = os.environ.get('ECS_SERVICE_NAME')
+                
+                if ecs_cluster and ecs_service:
+                    try:
+                        ecs = boto3.client('ecs', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+                        resp = ecs.describe_services(cluster=ecs_cluster, services=[ecs_service])
+                        services = resp.get('services', [])
+                        if services:
+                            current_desired = services[0].get('desiredCount', 0)
+                            if current_desired == 0:
+                                print(f"Triggering scale-out for service {ecs_service}...")
+                                ecs.update_service(
+                                    cluster=ecs_cluster,
+                                    service=ecs_service,
+                                    desiredCount=1
+                                )
+                    except Exception as e:
+                        print(f"Error triggering scale-out: {e}")
+                        # Non-blocking error, proceed
+
+            
             return {
                 'statusCode': 200,
                 'headers': {
@@ -229,7 +253,7 @@ def get_status_handler(event, context):
             'body': json.dumps({'error': 'Internal Server Error'})
         }
 
-def list_sessions_handler(event, context):
+def get_sessions_handler(event, context):
     """List research sessions for this browser's session."""
     print(f"Received list_sessions event: {json.dumps(event)}")
     

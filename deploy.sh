@@ -68,19 +68,33 @@ elif [ "$ENVIRONMENT" == "cloud" ]; then
     echo ""
     
     # Frontend deployment
-    echo "Building frontend..."
-    cd frontend
-    npm run build
-    
-    # Get the frontend bucket from Terraform output
-    cd ../infrastructure
+    # Get Terraform outputs first
+    cd infrastructure
+    API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
     FRONTEND_BUCKET=$(terraform output -raw frontend_bucket 2>/dev/null || echo "")
     CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+    CLOUDFRONT_URL=$(terraform output -raw cloudfront_url 2>/dev/null || echo "")
     cd ..
+    
+    # Frontend deployment
+    echo "Building frontend..."
+    cd frontend
+    
+    if [ -n "$CLOUDFRONT_URL" ]; then
+        echo "Using CloudFront API URL: ${CLOUDFRONT_URL}/api"
+        export NEXT_PUBLIC_API_URL="${CLOUDFRONT_URL}/api"
+    elif [ -n "$API_ENDPOINT" ]; then
+        echo "Using Direct API Endpoint: ${API_ENDPOINT}/api"
+        export NEXT_PUBLIC_API_URL="${API_ENDPOINT}/api"
+    else
+        echo "Warning: Could not find api_endpoint or cloudfront_url in Terraform outputs."
+    fi
+
+    npm run build
     
     if [ -n "$FRONTEND_BUCKET" ]; then
         echo "Deploying frontend to S3: $FRONTEND_BUCKET"
-        aws s3 sync frontend/out/ "s3://$FRONTEND_BUCKET/" --delete
+        aws s3 sync out/ "s3://$FRONTEND_BUCKET/" --delete
         
         if [ -n "$CLOUDFRONT_DIST_ID" ]; then
             echo "Invalidating CloudFront cache..."
@@ -89,13 +103,11 @@ elif [ "$ENVIRONMENT" == "cloud" ]; then
                 --paths "/*"
         fi
         
-        CLOUDFRONT_URL=$(cd infrastructure && terraform output -raw cloudfront_url 2>/dev/null || echo "")
         echo ""
         echo "Frontend deployment complete!"
         echo "Application URL: $CLOUDFRONT_URL"
     else
         echo "Warning: Could not find frontend_bucket in Terraform outputs."
-        echo "Run 'terraform apply' in infrastructure/ first, then re-run this script."
     fi
 
 else

@@ -27,7 +27,8 @@ if not os.environ.get('DYNAMODB_TABLE_TASKS'):
     os.environ['DYNAMODB_TABLE_TASKS'] = 'market-research-tasks'
 
 # Import the actual Lambda handlers
-from backend.lambdas.handler import submit_handler, get_status_handler, list_sessions_handler, get_report_handler
+# Import the actual Lambda handlers
+from backend.lambdas.handler import submit_handler, get_status_handler, get_sessions_handler, get_report_handler
 
 app = FastAPI(title="Local API Gateway Emulator")
 
@@ -39,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/research")
+@app.post("/api/research")
 async def proxy_submit(request: Request):
     body = await request.json()
     
@@ -57,7 +58,7 @@ async def proxy_submit(request: Request):
         
     return json.loads(response['body'])
 
-@app.get("/tasks/{task_id}")
+@app.get("/api/tasks/{task_id}")
 async def proxy_get_status(task_id: str):
     # Construct Lambda Event
     event = {
@@ -75,15 +76,15 @@ async def proxy_get_status(task_id: str):
     return json.loads(response['body'])
 
 
-@app.get("/sessions")
-async def proxy_list_sessions(request: Request):
+@app.get("/api/sessions")
+async def proxy_get_sessions(request: Request):
     """List research sessions for this browser."""
     event = {
         "headers": dict(request.headers)
     }
     context = {}
     
-    response = list_sessions_handler(event, context)
+    response = get_sessions_handler(event, context)
     
     if response['statusCode'] >= 400:
         raise HTTPException(status_code=response['statusCode'], detail=json.loads(response['body']))
@@ -95,7 +96,7 @@ async def proxy_list_sessions(request: Request):
 async def health_check():
     return {"status": "healthy"}
 
-@app.get("/reports/{task_id}")
+@app.get("/api/reports/{task_id}")
 async def get_report(task_id: str):
     """Download the report for a task."""
     event = {

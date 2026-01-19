@@ -39,17 +39,13 @@ export default function Sidebar({
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Unknown date';
     const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
-    
-    if (diffHours < 24) {
-      return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    } else if (diffHours < 48) {
-      return 'Yesterday';
-    } else {
-      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    }
+    return date.toLocaleString(undefined, { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
   };
 
   return (

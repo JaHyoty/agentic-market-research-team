@@ -47,6 +47,69 @@ export default function Home() {
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [completedAgents, setCompletedAgents] = useState<Set<string>>(new Set());
   
+  // Ref for cleanup function of the active polling
+  const cleanupPollRef = useRef<(() => void) | null>(null);
+
+  // Helper to safely stop polling
+  const stopPolling = useCallback(() => {
+    if (cleanupPollRef.current) {
+      cleanupPollRef.current();
+      cleanupPollRef.current = null;
+    }
+  }, []);
+
+  // Helper to start polling with auto-cleanup of previous
+  const startPolling = useCallback((id: string) => {
+    stopPolling(); // Warning: Ensure this doesn't run if we want multiple concurrent (we don't for selected task)
+    
+    // reset loading/error states for new polling if needed? 
+    // Usually state passed in handles UI, this just handles the subscription
+    
+    // We need to define subscribeToEvents logic here or reuse it.
+    // The original subscribeToEvents returned cleanup. 
+    // Let's modify subscribeToEvents to NOT return cleanup but store it?
+    // OR just use it here.
+    
+    // Better: Wrap subscribeToEvents logic here
+    const cleanup = pollTaskEvents(id, {
+      onEvents: (newEvents, allEvents) => {
+        setEvents(allEvents);
+        
+        // Mark agents as completed
+        for (const event of newEvents) {
+          if (KNOWN_AGENTS.includes(event.agent.toLowerCase()) && event.action === 'result') {
+            setCompletedAgents(prev => new Set([...prev, event.agent.toLowerCase()]));
+          }
+        }
+      },
+      onStatus: (newStatus) => {
+        setStatus(newStatus);
+      },
+      onCurrentAgent: (agent) => {
+        setActiveAgent(agent);
+      },
+      onComplete: (data) => {
+        setStatus(data.status);
+        setReportUrl(data.report_url);
+        setLoading(false);
+        setActiveAgent(null);
+        
+        if (data.status === 'COMPLETED') {
+            stopPolling(); // Stop polling on completion
+            clearCurrentSession();
+        }
+        
+        loadSessions(); 
+      },
+      onError: (err) => {
+        setError(err);
+        setLoading(false);
+      }
+    });
+
+    cleanupPollRef.current = cleanup;
+  }, [stopPolling, setError, setLoading, setStatus, setEvents, setCompletedAgents, setActiveAgent, setReportUrl]); // Dependencies
+
   // Ref for auto-scrolling live feed
   const liveFeedRef = useRef<HTMLDivElement>(null);
 
@@ -56,8 +119,6 @@ export default function Home() {
       liveFeedRef.current.scrollTop = liveFeedRef.current.scrollHeight;
     }
   }, [events]);
-
-  // ... (unchanged eventsByAgent logic) ...
   const eventsByAgent = events.reduce((acc, event) => {
     const agent = event.agent.toLowerCase();
     if (!acc[agent]) acc[agent] = [];
@@ -81,6 +142,20 @@ export default function Home() {
       setTaskId(savedTaskId);
       loadExistingTask(savedTaskId);
     }
+    
+    // Cleanup on unmount
+    return () => {
+        stopPolling();
+    };
+  }, []);
+
+  // Poll sessions list to update sidebar status (e.g. for background tasks)
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+        loadSessions();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
   }, []);
   
   const toggleSidebar = () => {
@@ -91,11 +166,9 @@ export default function Home() {
   
   const loadSessions = async () => {
     try {
-      // Try to fetch from server first
       const response = await fetchSessions();
       setSessions(response.sessions);
     } catch {
-      // Fall back to local storage
       const localSessions = getLocalSessions();
       setSessions(localSessions.map(s => ({
         task_id: s.id,
@@ -108,62 +181,35 @@ export default function Home() {
   
   const loadExistingTask = async (id: string) => {
     try {
+      stopPolling(); // Ensure clean slate
+      
       const data = await getTaskStatus(id);
       setStatus(data.status);
       setEvents(data.events || []);
       setReportUrl(data.report_url);
-      setTaskQuery(data.query || null); // Load the original query
+      setTaskQuery(data.query || null); 
+      setCompletedAgents(new Set()); // Reset completed agents
       
+      // Re-calculate completed agents from loaded events
+        if (data.events) {
+            const completed = new Set<string>();
+            for (const event of data.events) {
+                if (KNOWN_AGENTS.includes(event.agent.toLowerCase()) && event.action === 'result') {
+                    completed.add(event.agent.toLowerCase());
+                }
+            }
+            setCompletedAgents(completed);
+        }
+
       if (data.status !== 'COMPLETED' && data.status !== 'FAILED') {
         setLoading(true);
-        subscribeToEvents(id);
+        startPolling(id);
       }
     } catch (err) {
       console.error('Failed to load existing task:', err);
       clearCurrentSession();
     }
   };
-  
-  // ... (subscribeToEvents) ...
-  const subscribeToEvents = useCallback((id: string) => {
-    const cleanup = pollTaskEvents(id, {
-      onEvents: (newEvents, allEvents) => {
-        setEvents(allEvents);
-        
-        // Mark agents as completed when they produce a result
-        for (const event of newEvents) {
-          if (KNOWN_AGENTS.includes(event.agent.toLowerCase()) && event.action === 'result') {
-            setCompletedAgents(prev => new Set([...prev, event.agent.toLowerCase()]));
-          }
-        }
-      },
-      onStatus: (newStatus) => {
-        setStatus(newStatus);
-      },
-      onCurrentAgent: (agent) => {
-        // Real-time agent tracking from API
-        setActiveAgent(agent);
-      },
-      onComplete: (data) => {
-        setStatus(data.status);
-        setReportUrl(data.report_url);
-        setLoading(false);
-        setActiveAgent(null);
-        
-        if (data.status === 'COMPLETED') {
-          clearCurrentSession();
-        }
-        
-        loadSessions(); // Refresh sessions list
-      },
-      onError: (err) => {
-        setError(err);
-        setLoading(false);
-      }
-    });
-    
-    return cleanup;
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,9 +222,9 @@ export default function Home() {
     if (status === 'CLARIFICATION_REQUIRED' && taskId) {
         try {
             await answerClarification(taskId, query); 
-            setQuery(''); // Clear answer input
-            setLoading(true); // Show loading state
-            subscribeToEvents(taskId); // Restart polling since it stopped on CLARIFICATION_REQUIRED
+            setQuery(''); 
+            setLoading(true); 
+            startPolling(taskId); // Use new helper
         } catch (err) {
             setError("Failed to submit clarification.");
             setLoading(false);
@@ -187,6 +233,7 @@ export default function Home() {
     }
 
     // New Research
+    stopPolling(); // Stop any previous
     setEvents([]);
     setReportUrl(null);
     setActiveAgent(null);
@@ -195,10 +242,9 @@ export default function Home() {
     try {
       const data = await submitResearch(query);
       setTaskId(data.task_id);
-      setTaskQuery(query); // Set explicit goal
+      setTaskQuery(query);
       setStatus('QUEUED');
       
-      // Save to local storage
       saveSession({
         id: data.task_id,
         query: query,
@@ -208,13 +254,10 @@ export default function Home() {
       });
       setCurrentSession(data.task_id);
       
-      // Start polling for events
-      subscribeToEvents(data.task_id);
+      startPolling(data.task_id); // Use new helper
       
-      // Refresh sessions list
       loadSessions();
-      
-      setQuery(''); // Clear input
+      setQuery(''); 
     } catch (err) {
       setError("Failed to submit research request.");
       setLoading(false);
@@ -222,11 +265,15 @@ export default function Home() {
   };
   
   const handleSelectSession = async (sessionId: string) => {
+    if (taskId === sessionId) return; // Don't reload if already active
+    
+    stopPolling(); // Stop current
     setTaskId(sessionId);
     setCurrentSession(sessionId);
-    setEvents([]);
+    setEvents([]); // Visual clear
     setCompletedAgents(new Set());
     setActiveAgent(null);
+    setStatus('IDLE'); // Reset status briefly
     
     await loadExistingTask(sessionId);
   };
@@ -236,16 +283,12 @@ export default function Home() {
     setSessions(prev => prev.filter(s => s.task_id !== sessionId));
     
     if (taskId === sessionId) {
-      setTaskId(null);
-      setTaskQuery(null);
-      setStatus('IDLE');
-      setEvents([]);
-      setReportUrl(null);
-      clearCurrentSession();
+      handleNewResearch(); // This handles cleanup
     }
   };
   
   const handleNewResearch = () => {
+    stopPolling();
     setTaskId(null);
     setTaskQuery(null);
     setStatus('IDLE');
@@ -253,6 +296,8 @@ export default function Home() {
     setReportUrl(null);
     setLoading(false);
     clearCurrentSession();
+    setCompletedAgents(new Set());
+    setActiveAgent(null);
   };
 
   return (
@@ -505,9 +550,17 @@ export default function Home() {
                     <p>Research failed. Please try again.</p>
                   </div>
                 ) : status === 'QUEUED' ? (
-                  <div className="text-red-400 space-y-2">
-                    <AlertCircle className="w-10 h-10 mx-auto" />
+                  <div className="text-blue-400 space-y-2">
+                    <Loader2 className="w-10 h-10 mx-auto animate-spin text-blue-400" />
                     <p>Research is queued. Waiting for the next available resource.</p>
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 10 }}
+                      className="text-orange-300/80 text-sm max-w-xs mx-auto"
+                    >
+                      This might take a up to 1 minute if a new team of agents needs to be deployed for your task...
+                    </motion.p>
                   </div>
                 ) : status === 'CLARIFICATION_REQUIRED' ? (
                   <div className="text-orange-400 space-y-2 max-w-xs">

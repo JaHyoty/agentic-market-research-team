@@ -11,6 +11,8 @@ variable "max_capacity" { default = 5 }
 variable "region" {}
 variable "environment" {}
 
+data "aws_caller_identity" "current" {}
+
 # CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "worker" {
   name              = "/ecs/market-research-worker"
@@ -96,7 +98,7 @@ resource "aws_iam_role_policy" "worker" {
           "sqs:ChangeMessageVisibility",
           "sqs:GetQueueAttributes"
         ]
-        Resource = "arn:aws:sqs:us-east-1:637423509675:${var.sqs_queue_name}"
+        Resource = "arn:aws:sqs:${var.region}:${data.aws_caller_identity.current.account_id}:${var.sqs_queue_name}"
       },
       {
         Effect = "Allow"
@@ -105,7 +107,7 @@ resource "aws_iam_role_policy" "worker" {
           "dynamodb:UpdateItem",
           "dynamodb:Query"
         ]
-        Resource = "arn:aws:dynamodb:us-east-1:637423509675:table/${var.dynamodb_table_name}"
+        Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${var.dynamodb_table_name}"
       },
       {
         Effect = "Allow"
@@ -118,7 +120,7 @@ resource "aws_iam_role_policy" "worker" {
       {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
-        Resource = "arn:aws:secretsmanager:us-east-1:637423509675:secret:market-research-keys*"
+        Resource = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:market-research-keys*"
       }
     ]
   })

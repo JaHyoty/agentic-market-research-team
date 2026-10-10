@@ -8,6 +8,12 @@ provider "aws" {
   }
 }
 
+# CloudFront certificates must live in us-east-1
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
 # Required for CloudFront OAC
 terraform {
   required_providers {
@@ -87,8 +93,15 @@ module "ecs" {
 }
 
 module "cloudfront" {
-  source       = "./cloudfront"
-  api_endpoint = module.apigateway.api_endpoint
+  source         = "./cloudfront"
+  api_endpoint   = module.apigateway.api_endpoint
+  primary_domain = var.primary_domain
+  domains        = var.domains
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
 }
 
 # Outputs
@@ -98,6 +111,10 @@ output "api_endpoint" {
 
 output "cloudfront_url" {
   value = module.cloudfront.cloudfront_url
+}
+
+output "site_url" {
+  value = module.cloudfront.site_url
 }
 
 output "cloudfront_distribution_id" {

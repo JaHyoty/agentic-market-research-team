@@ -54,7 +54,7 @@ jobs:
             echo "SERVICE=$(terraform output -raw ecs_service_name)"
             echo "BUCKET=$(terraform output -raw frontend_bucket)"
             echo "DIST_ID=$(terraform output -raw cloudfront_distribution_id)"
-            echo "CF_URL=$(terraform output -raw cloudfront_url)"
+            echo "CF_URL=$(terraform output -raw site_url)"
           } >> "$GITHUB_ENV"
 
       - uses: aws-actions/amazon-ecr-login@v2

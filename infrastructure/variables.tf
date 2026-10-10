@@ -22,3 +22,17 @@ variable "tavily_api_key" {
 variable "environment" {
   default = "prod"
 }
+
+variable "primary_domain" {
+  description = "Canonical site hostname"
+  default     = "market-research.jahyoty.com"
+}
+
+variable "domains" {
+  description = "Hostname => Route53 hosted zone. Non-primary hostnames 301-redirect to primary_domain."
+  type        = map(string)
+  default = {
+    "market-research.jahyoty.com"     = "jahyoty.com"
+    "market-research.jaakkohyoty.com" = "jaakkohyoty.com"
+  }
+}

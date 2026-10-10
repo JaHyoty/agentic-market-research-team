@@ -3,6 +3,85 @@
 variable "api_endpoint" {}
 variable "region" { default = "us-east-1" }
 
+# Canonical site hostname; all other keys redirect (301) to it.
+# Map of hostname => Route53 hosted zone name it lives in.
+variable "primary_domain" {}
+variable "domains" { type = map(string) }
+
+terraform {
+  required_providers {
+    aws = {
+      source                = "hashicorp/aws"
+      configuration_aliases = [aws.us_east_1]
+    }
+  }
+}
+
+data "aws_route53_zone" "zone" {
+  for_each = toset(values(var.domains))
+  name     = each.value
+}
+
+# CloudFront requires its certificate in us-east-1
+resource "aws_acm_certificate" "site" {
+  provider                  = aws.us_east_1
+  domain_name               = var.primary_domain
+  subject_alternative_names = [for d in keys(var.domains) : d if d != var.primary_domain]
+  validation_method         = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.site.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.zone[var.domains[each.key]].zone_id
+}
+
+resource "aws_acm_certificate_validation" "site" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.site.arn
+  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+}
+
+# Redirect every non-primary custom hostname to the primary one
+resource "aws_cloudfront_function" "redirect" {
+  name    = "market-research-redirect"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = <<-JS
+    function handler(event) {
+      var r = event.request;
+      var host = r.headers.host.value;
+      var redirectHosts = ${jsonencode([for d in keys(var.domains) : d if d != var.primary_domain])};
+      if (redirectHosts.indexOf(host) === -1) {
+        return r;
+      }
+      var qs = Object.keys(r.querystring).map(function (k) {
+        return k + '=' + r.querystring[k].value;
+      }).join('&');
+      return {
+        statusCode: 301,
+        statusDescription: 'Moved Permanently',
+        headers: { location: { value: 'https://${var.primary_domain}' + r.uri + (qs ? '?' + qs : '') } }
+      };
+    }
+  JS
+}
+
 # S3 bucket for frontend static files
 resource "aws_s3_bucket" "frontend" {
   bucket_prefix = "market-research-frontend"
@@ -52,6 +131,7 @@ resource "aws_cloudfront_distribution" "main" {
   comment             = "Market Research Frontend and API Distribution"
   default_root_object = "index.html"
   price_class         = "PriceClass_100" # US, Canada, Europe only (cheapest)
+  aliases             = keys(var.domains)
   
   # Frontend origin (S3)
   origin {
@@ -80,6 +160,11 @@ resource "aws_cloudfront_distribution" "main" {
     target_origin_id       = "frontend"
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.redirect.arn
+    }
 
     forwarded_values {
       query_string = false
@@ -135,7 +220,9 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.site.certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 
   tags = {
@@ -157,4 +244,21 @@ output "frontend_bucket" {
 
 output "frontend_bucket_arn" {
   value = aws_s3_bucket.frontend.arn
+}
+
+resource "aws_route53_record" "site" {
+  for_each = var.domains
+  zone_id  = data.aws_route53_zone.zone[each.value].zone_id
+  name     = each.key
+  type     = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.main.domain_name
+    zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+output "site_url" {
+  value = "https://${var.primary_domain}"
 }

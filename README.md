@@ -54,7 +54,7 @@ graph TD
 ### Backend
 -   **Runtime**: Python 3.11
 -   **Orchestration**: LangChain & LangGraph
--   **AI Models**: Grok 4 Fast via xAI (OpenRouter)
+-   **AI Models**: Grok 4.3 via xAI (OpenRouter)
 -   **Tools**:
     -   `Tavily`: Web search and content extraction
     -   `YFinance`: Stock market data

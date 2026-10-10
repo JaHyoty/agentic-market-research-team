@@ -15,7 +15,7 @@ print(f"Initializing ChatOpenRouter with API Key present: {bool(settings.OPENROU
 
 # Initialize LLM
 llm = ChatOpenRouter(
-    model="x-ai/grok-4-fast",
+    model="x-ai/grok-4.3",
     temperature=0
 )
 
